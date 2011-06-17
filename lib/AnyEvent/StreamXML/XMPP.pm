@@ -39,9 +39,12 @@ sub send_start {
 
 sub send_end {
 	my $self = shift;
+	Carp::cluck "send_end requested from @{[ (caller)[1,2] ]}";
 	$self->{sent_end}++ and return;
-	$self->{h}->timeout(10);
-	$self->send("</stream:stream>");
+	if( $self->{h} ) {
+		$self->{h}->timeout(10);
+		$self->send("</stream:stream>");
+	}
 }
 
 1;

@@ -39,6 +39,7 @@ sub debug_recv {
 	my $rbuf = shift;
 	use POSIX 'strftime';
 	my $time = strftime( '%b %d %H:%M:%S', localtime() );
+	utf8::encode($$rbuf) if utf8::is_utf8($$rbuf);
 	binmode STDOUT, ':raw';
 	print STDOUT "\e[0;37m$time in \e[1;32m>>\t\e[0;032m$$rbuf\e[0m\n";
 
@@ -203,8 +204,8 @@ sub _connected {
 	$self->{cb}{eof} = sub {
 		$self or return;
 		warn "Eof on handle" if $self->{debug};
-		$self->_reconnect_after(); # watches for connected/connecting
-		#$self->disconnect();
+		$self->disconnect();
+		$self->_reconnect_after();
 	};
 	
 	$self->{cb}{err} = sub {
@@ -212,14 +213,15 @@ sub _connected {
 		if (!$self->{destroying} and $self->{sent_end} and $!{ETIMEDOUT}) {
 			#$self->_reconnect_after(); # watches for connected/connecting
 			$self->disconnect();
+			$self->_reconnect_after();
 			return;
 		}
 		my $e = "$!";
 		if ($self->{destroying}) {
 			$e = "Connection closed";
 		}
-		warn "Error on handle: $e" if $self->{debug};
-		#$self->disconnect("Error: $e");
+		warn "Error on handle: $e";# if $self->{debug};
+		$self->disconnect("Error: $e");
 		$self->_reconnect_after(); # watches for connected/connecting
 	};
 	
@@ -231,8 +233,9 @@ sub _connected {
 			$self->{parser}->parse_more( substr($h->{rbuf},0,length($h->{rbuf}),'') );
 		}
 		catch {
-			#warn "Parse died <$_>.";
+			warn "Parse died <$_>.";
 			$self->disconnect("Error: $_");
+			$self->_reconnect_after(); # watches for connected/connecting
 		};
 	};
 	
@@ -279,7 +282,7 @@ sub _reconnect_after {
 
 sub reconnect {
 	my $self = shift;
-	$self->disconnect;
+	$self->disconnect(@_);
 	$self->connect;
 }
 
