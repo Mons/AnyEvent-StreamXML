@@ -79,7 +79,7 @@ sub init {
 			}
 		}
 		else {
-			warn "iq type $type";
+			#warn "iq type $type";
 			# request to us
 			my ($query) = $s->getElementsByTagName('query');
 			#eval {
@@ -119,6 +119,7 @@ sub init {
 			$iq->reply({
 				iq => {
 					query => [
+						{ -xmlns => ns('disco_info') },
 						{ identity => +{
 							map { ("-$_" => $self->{disco}{identity}{$_}) } keys %{ $self->{disco}{identity} }
 						} },

@@ -33,4 +33,9 @@ sub  AUTOLOAD {
 	#$self->[0]->$name(@_);
 }
 
+sub DESTROY {
+	my $self = shift;
+	@$self = ();
+}
+
 1;
