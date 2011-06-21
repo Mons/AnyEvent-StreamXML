@@ -27,6 +27,7 @@ sub DESTROY {
 	local $SIG{__DIE__} = sub { warn "Exception during StreamXML.XMPP.Iq.DESTROY: @_"; };
 	$self->[1] or return @$self = ();
 	$self->error('not-acceptable');
+	return @$self = ();
 }
 
 1;

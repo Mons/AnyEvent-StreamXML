@@ -4,7 +4,7 @@ use parent 'AnyEvent::StreamXML';
 use mro 'c3';
 use common::sense;
 use uni::perl ':dumper';
-use XML::Hash::LX 0.0601;
+use XML::Hash::LX 0.06001;
 use Carp;
 use AnyEvent::StreamXML::XMPP::NS;
 
