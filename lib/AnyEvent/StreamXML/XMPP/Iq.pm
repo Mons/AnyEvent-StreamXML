@@ -6,6 +6,7 @@ sub replied { delete shift->[1];return }
 *noreply = \&replied;
 
 sub type { $_[0][2]{type} ||= $_[0][0]->getAttribute('type'); }
+sub query { $_[0][2]{query} ||= ( $_[0][0]->getElementsByTagName('query') )[0]; }
 
 sub reply {
 	my $self = shift;

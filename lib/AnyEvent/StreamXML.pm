@@ -172,17 +172,18 @@ sub _make_parser {
 	weaken(my $self = shift);
 	$self->{stanza_handlers}{''} ||=  sub {
 		warn "Stanza";
-		$self->handles('stanza') or return warn "stream_end not handled\n";
+		$self->handles('stanza') or return warn "event `stanza' not handled\n$_[0]\n";
+		$self->event(stanza => @_);
 	};
 	$self->{handlers}{StreamStart} ||= sub {
 		$self->{h}->timeout(undef);
-		$self->handles('stream_ready') or return warn "stream_ready not handled\n";
+		$self->handles('stream_ready') or return warn "event `stream_ready' not handled\n";
 		$self->event( stream_ready => @_ );
 	};
 	$self->{handlers}{Stanza} ||= $self->{stanza_handlers};
 	$self->{handlers}{StreamEnd} ||= sub {
 		#warn "StreamEnd";
-		$self->handles('stream_end') or return warn "stream_end not handled\n";
+		$self->handles('stream_end') or return warn "event `stream_end' not handled\n";
 		$self->event( stream_end => @_  )
 	};
 	my $parser = XML::Parser->new(

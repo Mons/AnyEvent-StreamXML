@@ -197,9 +197,15 @@ sub reply {
 	$s->setAttribute( from => $self->{jid} );
 	$s->setAttribute( to => $iq->getAttribute('from') );
 	$s->setAttribute( id => $iq->getAttribute('id') );
-	my ($q,$rq);
-	if ($q = $iq->firstChild and $q->nodeName eq 'query' and $rq = $s->firstChild and $rq->nodeName eq 'query' and !$rq->getAttribute('xmlns')) {
-		$rq->setAttribute('xmlns', $q->getAttribute('xmlns'));
+	#warn "Composed reply: ".$s;
+	my $rq = ($s->getElementsByTagName('query'))[0];
+	if ($rq and !$rq->getAttribute('xmlns')) {
+		my $q = ($iq->getElementsByTagName('query'))[0];
+		if ($q) {
+			$rq->setAttribute('xmlns', $q->getAttribute('xmlns'));
+		} else {
+			warn "iq.query doesn't have xmlns and have no iq.query in request";
+		}
 	}
 	try { $iq->replied(1) };
 	$self->send( $s->toString() );
@@ -287,6 +293,24 @@ sub request {
 		$rq->( undef, "Response timeout" );
 	};
 	$self->send( $s->toString() );
+}
+
+sub message {
+	my $self = shift;
+	if (ref $_[0] eq 'HASH') {
+		unless ( exists $_[0]{message} ) {
+			$_[0] = { message => $_[0] };
+		}
+	}
+	my $s = $self->_compose(@_);
+	my $id = $s->getAttribute('id');
+	unless ($id) {
+		$id = $self->nextid;
+		$s->setAttribute('id',$id);
+	}
+	$s->setAttribute( from => $self->{jid} ) unless $s->getAttribute('from');
+	$self->send( { message => $s } );
+	
 }
 
 1;
