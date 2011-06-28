@@ -313,4 +313,35 @@ sub message {
 	
 }
 
+sub presence {
+	my $self = shift;
+	my $type = shift;
+	my ($from,$to) = ($self->{jid});
+	if (@_ == 1) {
+		$to = shift
+	}
+	elsif ( @_ == 2) {
+		($from,$to) = @_;
+	}
+	else {
+		warn "Wrong arguments to .presence(type, from, [to]): [$type @_]\n";
+		return;
+	}
+	if (ref $_[0] eq 'HASH') {
+		unless ( exists $_[0]{message} ) {
+			$_[0] = { message => $_[0] };
+		}
+	}
+	my $s = $self->_compose({
+		presence => {
+			$type eq 'available' ? () : ( -type => $type ),
+			-from => $from,
+			-to => $to,
+			-id => $self->nextid,
+		}
+	});
+	$self->send( $s->toString() );
+	
+}
+
 1;

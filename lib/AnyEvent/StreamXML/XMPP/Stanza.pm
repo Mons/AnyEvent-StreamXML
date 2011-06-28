@@ -20,7 +20,7 @@ sub new {
 }
 
 sub from { $_[0][2]{from} ||= jid( $_[0][0]->getAttribute('from') ); }
-sub to   { $_[0][2]{from} ||= jid( $_[0][0]->getAttribute('to') ); }
+sub to   { $_[0][2]{to}   ||= jid( $_[0][0]->getAttribute('to') ); }
 
 our $AUTOLOAD;
 sub  AUTOLOAD {
