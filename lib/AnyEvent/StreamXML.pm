@@ -7,7 +7,7 @@ use warnings;
 };
 use Carp;
 
-use parent 'Object::Event';
+use Event::Emitter;
 use AnyEvent::Socket;
 use AnyEvent::Handle;
 
@@ -27,11 +27,6 @@ use Scalar::Util 'weaken';
 =back
 
 =cut
-
-
-unless (__PACKAGE__->can('on')) {
-	*on = __PACKAGE__->can('reg_cb');
-}
 
 sub debug_recv {
 	my $self = shift;
@@ -97,8 +92,10 @@ sub send {
 }
 
 sub new {
-	my $self = shift->SUPER::new(@_);
-	$self->init(@_);
+	my $pk = shift;
+	my $self = bless {@_}, $pk;
+	#my $self = shift->SUPER::new(@_);
+	$self->init();
 	return $self;
 }
 
@@ -113,7 +110,7 @@ sub init {
 	$self->{timers}     = {};
 	$self->{_}          = {}; # some shit, like guards
 	$self->{h}          = undef; # AE::Handle
-	$self->set_exception_cb(sub {
+	$self->on(__DIE__ => sub {
 		my ($err, $e ) = @_;
 		my ( $ev,$obj,@args ) = @{ $self->{__oe_exception_rec} };
 		@args = () if $ev ne $e;

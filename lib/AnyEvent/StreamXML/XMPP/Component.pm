@@ -8,15 +8,18 @@ use uni::perl ':dumper';
 use XML::Hash::LX;
 use Carp;
 use Digest::SHA1 'sha1_hex';
+use POSIX 'strftime';
 
 use AnyEvent::StreamXML::XMPP::NS;
 use AnyEvent::StreamXML::XMPP::Iq;
 use AnyEvent::StreamXML::XMPP::Presence;
+use AnyEvent::StreamXML::XMPP::Message;
 use AnyEvent::StreamXML::XMPP::JID;
 
 use Try::Tiny;
 use Time::HiRes 'time';
 
+sub domain { shift->{jid} }
 sub feature {
 	my $self   = shift;
 	my $name   = shift;
@@ -30,11 +33,12 @@ sub feature {
 
 sub init {
 	my $self = shift;
+	$self->next::method(@_);
 	$self->{name} or carp "It's recommended to setup a component name";
 	$self->{jid} or croak "Need <jid>";
 	$self->{password} or croak "Need <password>";
 	$self->{stream_ns} = ns('component_accept') unless defined $self->{stream_ns};
-	$self->next::method();
+	$self->{port} ||= 5275;
 
 	$self->{disco}{ identity }{ category } ||= 'gateway';
 	$self->{disco}{ identity }{ type }     ||= 'xmpp';
@@ -83,18 +87,26 @@ sub init {
 			# request to us
 			my ($query) = $s->getElementsByTagName('query');
 			#eval {
-			my $ns = $query && $query->getAttribute('xmlns');
+			if( my $ns = $query && $query->getAttribute('xmlns') ) {
 			#warn "iq query ($query) $ns -> ".rns($ns);
-			my $event = rns($ns);
-			if ( $self->handles( $event ) ) {
-				# TODO: exception handler
-				$self->event( $event => $s, $query );
+				my $event = rns($ns);
+				if ( $self->handles( $event ) ) {
+					# TODO: exception handler
+					$self->event( $event => $s, $query );
+				} else {
+					warn "iq query.$ns (event $event) not handled";
+					$s->error('not-acceptable', { iq => { from => $self->{jid} } });
+				}
 			} else {
-				warn "iq query.$ns (event $event) not handled";
+				warn "iq without query";
 				$s->error('not-acceptable', { iq => { from => $self->{jid} } });
 			}
 			#};warn if $@;
 		}
+	};
+	$self->{stanza_handlers}{message} = sub {
+		$self or return;
+		$self->event(message => AnyEvent::StreamXML::XMPP::Message->new($_[0],$self));
 	};
 	warn dumper $self->{handlers};
 
@@ -102,9 +114,12 @@ sub init {
 		stream_ready => sub {
 			my ($c,$stream) = @_;
 			warn "stream ready, start handshake @_";
+			# TODO: domain detection
 			$self->{stream} = $stream;
 			$self->{id} = $stream->getAttribute('id');
-			$self->{jid} = jid($stream->getAttribute('from'));
+			if (( !$self->{jid} or $self->{jid} !~ /\./) and $stream->getAttribute('from') ) {
+				$self->{jid} = jid($stream->getAttribute('from'));
+			}
 			($self->{server}{domain}) = $self->{jid} =~ /^[^.]+\.(.+)$/;
 			warn "Started on domain $self->{server}{domain}";
 			$c->send({
@@ -167,7 +182,7 @@ sub init {
 											query => { -xmlns => ns( 'ping' ) },
 										}
 									},sub {
-										warn "ping reply: in ".sprintf("%0.4fs", time - $at);
+										#warn "ping reply: in ".sprintf("%0.4fs", time - $at);
 										delete $c->{timers}{ping_wait};
 									});
 								};
@@ -181,6 +196,16 @@ sub init {
 				}
 			}
 			
+		},
+		register => sub {
+			my ($c,$iq) = @_;
+			my $type = $iq->type;
+			if ($type eq 'set') {
+				if (my $rem = $iq->getElementsByTagName('remove')) {
+					$type = "remove";
+				}
+			}
+			$c->event("register_$type",$iq);
 		},
 	);
 }
@@ -263,7 +288,7 @@ sub error {
 	$s->appendChild($e);
 	try {
 		$iq->replied(1);
-	};
+	} catch {};
 	$self->send( $s->toString() );
 	return;
 }
@@ -334,7 +359,7 @@ sub presence {
 	}
 	my $s = $self->_compose({
 		presence => {
-			$type eq 'available' ? () : ( -type => $type ),
+			( $type eq 'available' or ! length $type ) ? () : ( -type => $type ),
 			-from => $from,
 			-to => $to,
 			-id => $self->nextid,

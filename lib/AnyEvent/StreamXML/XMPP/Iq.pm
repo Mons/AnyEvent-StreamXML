@@ -11,14 +11,14 @@ sub query { $_[0][2]{query} ||= ( $_[0][0]->getElementsByTagName('query') )[0]; 
 sub reply {
 	my $self = shift;
 	$self->[1] or return warn "No connection for reply()";
-	$self->[1]->reply( $self->[0], @_ );
+	$self->[1]->reply( $self, @_ );
 	delete $self->[1];
 }
 
 sub error {
 	my $self = shift;
 	$self->[1] or return warn "No connection for error()";
-	$self->[1]->error( $self->[0], @_ );
+	$self->[1]->error( $self, @_ );
 	delete $self->[1];
 }
 
