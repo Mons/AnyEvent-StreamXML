@@ -16,6 +16,7 @@ use XML::Parser::Style::XMPP;
 use Try::Tiny;
 
 use Scalar::Util 'weaken';
+use mro 'c3';
 
 =head1 ATTRS
 
@@ -32,11 +33,13 @@ sub debug_recv {
 	my $self = shift;
 	$self->{debug_stream} or return;
 	my $rbuf = shift;
+	my $buf = $$rbuf;
+	substr($buf, -1) = '' while substr($buf, -1) eq "\n";
 	use POSIX 'strftime';
 	my $time = strftime( '%b %d %H:%M:%S', localtime() );
-	utf8::encode($$rbuf) if utf8::is_utf8($$rbuf);
+	utf8::encode($buf) if utf8::is_utf8($buf);
 	binmode STDOUT, ':raw';
-	print STDOUT "\e[0;37m$time in \e[1;32m>>\t\e[0;032m$$rbuf\e[0m\n";
+	print STDOUT "\e[0;37m$time in \e[1;32m>>\t\e[0;032m$buf\e[0m\n";
 
 }
 
@@ -53,7 +56,7 @@ sub debug_send {
 sub ref2xml : method {
 	my $self = shift;
 	try { require XML::Hash::LX; }
-	catch { croak "Can't load XML::Hash::LX for hash 2 xml conversion. Either install it or redefine `hash2xml' method" };
+	catch { croak "Can't load XML::Hash::LX for hash 2 xml conversion. Either install it or redefine `hash2xml' method ($_)" };
 	XML::Hash::LX::hash2xml($_[0], 'doc' => 1)->documentElement;
 }
 
@@ -83,11 +86,12 @@ sub _compose {
 
 sub send {
 	my $self = shift;
+	$self->{h} or return warn "Can't send() without handle at @{[ (caller)[1,2] ]}\n";
 	my $s = $self->_compose(@_);
 	my $buf = "$s";
 	$self->debug_send(\$buf);
 	utf8::encode $buf if utf8::is_utf8($buf);
-	$self->{h}->push_write( $buf );
+	$self->{h}->push_write( $buf."\n" );
 	return;
 }
 
@@ -198,23 +202,31 @@ sub _connected {
 	$self or return warn("self immediately destroyed?");
 	
 	$self->_make_parser();
+	delete $self->{sent_end};
 	
 	$self->{cb}{eof} = sub {
 		$self or return;
 		warn "Eof on handle" if $self->{debug};
+		try { $self->{h}->destroy; }
+		catch { warn $_ };
+		delete $self->{h};
 		$self->disconnect();
 		$self->_reconnect_after();
 	};
 	
 	$self->{cb}{err} = sub {
 		$self or return;
+		my $e = "$!";
+		warn "Error $e on handle" if $self->{debug};
+		try { $self->{h}->destroy; }
+		catch { warn $_ };
+		delete $self->{h};
 		if (!$self->{destroying} and $self->{sent_end} and $!{ETIMEDOUT}) {
 			#$self->_reconnect_after(); # watches for connected/connecting
 			$self->disconnect();
 			$self->_reconnect_after();
 			return;
 		}
-		my $e = "$!";
 		if ($self->{destroying}) {
 			$e = "Connection closed";
 		}
@@ -262,7 +274,23 @@ sub _disconnected {
 		catch { warn $_ }
 		delete $self->{h};
 	}}
+	warn "Disconnected\n" if $self->{debug} or $self->{debug_stream};
+	$self->_cleanup;
+	return;
+}
+
+sub _cleanup {
+	my $self = shift;
 	delete $self->{timers};
+	delete $self->{parser};
+	my $cl = delete $self->{clean};
+	for (@$cl) { $_->(); }
+	return;
+}
+
+sub cleanup {
+	my $self = shift;
+	push @{ $self->{clean} ||= [] }, @_;
 	return;
 }
 

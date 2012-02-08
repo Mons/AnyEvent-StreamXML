@@ -47,10 +47,14 @@ sub init {
 	$self->{disco}{ features }{ disco_info }++;
 	
 	weaken($self);
+	$self->{stanza_handlers}{'stream:error'} = sub {
+		$self or return;
+		warn "Stream Error @_";
+	};
 	$self->{stanza_handlers}{handshake} = sub {
 		$self or return;
 		$self->{handshaked} = 1;
-		$self->event(ready => ());
+		$self->event(handshaked => ());
 	};
 	$self->{stanza_handlers}{presence} = sub {
 		$self or return;
@@ -108,12 +112,19 @@ sub init {
 		$self or return;
 		$self->event(message => AnyEvent::StreamXML::XMPP::Message->new($_[0],$self));
 	};
-	warn dumper $self->{handlers};
+	$self->{handlers}{StreamEnd} ||= sub {
+		$self or return;
+		warn "Received graceful disconnect (</stream>). Send response and reconnect...";
+		#$self->send_end;
+		$self->disconnect();
+		$self->_reconnect_after;
+	};
+	#warn dumper $self->{handlers};
 
 	$self->on(
 		stream_ready => sub {
 			my ($c,$stream) = @_;
-			warn "stream ready, start handshake @_";
+			#warn "stream ready, start handshake @_";
 			# TODO: domain detection
 			$self->{stream} = $stream;
 			$self->{id} = $stream->getAttribute('id');
@@ -154,6 +165,7 @@ sub init {
 					}, sub {
 						if (my $iq = shift) {
 							#warn "response: $iq";
+							$self->cleanup(sub{ delete $self->{server} });
 							my ($query) = $iq->getElementsByTagName('query');
 							my (@features) = $query->getElementsByTagName('feature');
 							my $features = $self->{server}{features} ||= {};
@@ -210,163 +222,5 @@ sub init {
 	);
 }
 
-sub reply {
-	my $self = shift;
-	my $iq = shift;
-	if (!@_) {
-		@_ = ({ iq => {} });
-	}
-	my $s = $self->_compose(@_);
-	ref $s or die "Can't sent $_[0] as a reply to $iq at @{[ (caller)[1,2] ]}\n";
-	$s->setAttribute( type => 'result' ) unless $s->getAttribute('type');
-	$s->setAttribute( from => $self->{jid} );
-	$s->setAttribute( to => $iq->getAttribute('from') );
-	$s->setAttribute( id => $iq->getAttribute('id') );
-	#warn "Composed reply: ".$s;
-	my $rq = ($s->getElementsByTagName('query'))[0];
-	if ($rq and !$rq->getAttribute('xmlns')) {
-		my $q = ($iq->getElementsByTagName('query'))[0];
-		if ($q) {
-			$rq->setAttribute('xmlns', $q->getAttribute('xmlns'));
-		} else {
-			warn "iq.query doesn't have xmlns and have no iq.query in request";
-		}
-	}
-	try { $iq->replied(1) };
-	$self->send( $s->toString() );
-	return;
-}
-
-our %ERR = (
-	'bad-request'             => [modify => 400],
-	'conflict'                => [cancel => 409],
-	'feature-not-implemented' => [cancel => 501],
-	'forbidden'               => [auth   => 403],
-	'gone'                    => [modify => 302],
-	'internal-server-error'   => [wait   => 500],
-	'item-not-found'          => [cancel => 404],
-	'jid-malformed'           => [modify => 400],
-	'not-acceptable'          => [modify => 406],
-	'not-allowed'             => [cancel => 405],
-	'not-authorized'          => [auth   => 401],
-	'payment-required'        => [auth   => 402],
-	'recipient-unavailable'   => [wait   => 404],
-	'redirect'                => [modify => 302],
-	'registration-required'   => [auth   => 407],
-	'remote-server-not-found' => [cancel => 404],
-	'remote-server-timeout'   => [wait   => 504],
-	'resource-constraint'     => [wait   => 500],
-	'service-unavailable'     => [cancel => 503],
-	'subscription-required'   => [auth   => 407],
-	'undefined-condition'     => [cancel => 500],
-	'unexpected-request'      => [wait   => 400],
-);
-
-exists $ERR{'internal-server-error'} or die "Need 'internal-server-error'";
-
-sub error {
-	my $self = shift;
-	my $iq = shift;
-	my $error = shift;
-	exists $ERR{$error} or return warn("Unknown error: $error"),$iq->error('internal-server-error');
-	if (!@_) {
-		@_ = ({ iq => {} });
-	}
-	my $s = $self->_compose(@_);
-	ref $s or die "Can't sent $_[0] as a reply to $iq at @{[ (caller)[1,2] ]}\n";
-	$s->setAttribute( type => 'error' ) unless $s->getAttribute('type');
-	$s->setAttribute( from => $self->{jid} );
-	$s->setAttribute( to => $iq->getAttribute('from') );
-	$s->setAttribute( id => $iq->getAttribute('id') );
-	
-	my $e = XML::LibXML::Element->new('error');
-	$e->setAttribute( type => $ERR{$error}[ 0 ] );
-	$e->setAttribute( code => $ERR{$error}[ 1 ] );
-		my $n = XML::LibXML::Element->new($error);
-		$n->setAttribute(xmlns => ns( 'stanzas' ));
-		$e->appendChild($n);
-	$s->appendChild($e);
-	try {
-		$iq->replied(1);
-	} catch {};
-	$self->send( $s->toString() );
-	return;
-}
-
-sub request {
-	my $self = shift;
-	my $cb = pop;
-	my $s = $self->_compose(@_);
-	return $cb->(undef, "No 'to' attribute'") unless $s->getAttribute('to');
-	my $id = $s->getAttribute('id');
-	unless ($id) {
-		$id = $self->nextid;
-		$s->setAttribute('id',$id);
-	}
-	my $t;
-	exists $self->{req}{$id} and warn "duplicate id $id for @{[ ( caller )[1,2] ]}\n";
-	$self->{req}{$id} = sub {
-		undef $t;
-		$cb->( @_ );
-	};
-	
-	$s->setAttribute( type => 'get' ) unless $s->getAttribute('type');
-	$s->setAttribute( from => $self->{jid} ) unless $s->getAttribute('from');
-	
-	my $t; $t = AE::timer 30,0,sub {
-		my $rq = delete $self->{req}{$id};
-		$rq->( undef, "Response timeout" );
-	};
-	$self->send( $s->toString() );
-}
-
-sub message {
-	my $self = shift;
-	if (ref $_[0] eq 'HASH') {
-		unless ( exists $_[0]{message} ) {
-			$_[0] = { message => $_[0] };
-		}
-	}
-	my $s = $self->_compose(@_);
-	my $id = $s->getAttribute('id');
-	unless ($id) {
-		$id = $self->nextid;
-		$s->setAttribute('id',$id);
-	}
-	$s->setAttribute( from => $self->{jid} ) unless $s->getAttribute('from');
-	$self->send( { message => $s } );
-	
-}
-
-sub presence {
-	my $self = shift;
-	my $type = shift;
-	my ($from,$to) = ($self->{jid});
-	if (@_ == 1) {
-		$to = shift
-	}
-	elsif ( @_ == 2) {
-		($from,$to) = @_;
-	}
-	else {
-		warn "Wrong arguments to .presence(type, from, [to]): [$type @_]\n";
-		return;
-	}
-	if (ref $_[0] eq 'HASH') {
-		unless ( exists $_[0]{message} ) {
-			$_[0] = { message => $_[0] };
-		}
-	}
-	my $s = $self->_compose({
-		presence => {
-			( $type eq 'available' or ! length $type ) ? () : ( -type => $type ),
-			-from => $from,
-			-to => $to,
-			-id => $self->nextid,
-		}
-	});
-	$self->send( $s->toString() );
-	
-}
 
 1;
