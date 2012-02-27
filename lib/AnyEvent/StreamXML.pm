@@ -39,7 +39,7 @@ sub debug_recv {
 	my $time = strftime( '%b %d %H:%M:%S', localtime() );
 	utf8::encode($buf) if utf8::is_utf8($buf);
 	binmode STDOUT, ':raw';
-	print STDOUT "\e[0;37m$time in \e[1;32m>>\t\e[0;032m$buf\e[0m\n";
+	print STDOUT "\e[0;37m$time in \e[1;$self->{send_color}m>>\t\e[0;$self->{recv_color}m$buf\e[0m\n";
 
 }
 
@@ -50,7 +50,7 @@ sub debug_send {
 	use POSIX 'strftime';
 	my $time = strftime( '%b %d %H:%M:%S', localtime() );
 	binmode STDOUT, ':raw';
-	print STDOUT "\e[0;37m$time ou \e[1;33m<<\t\e[0;033m$$rbuf\e[0m\n";
+	print STDOUT "\e[0;37m$time ou \e[1;$self->{send_color}m<<\t\e[0;$self->{send_color}m$$rbuf\e[0m\n";
 }
 
 sub ref2xml : method {
@@ -88,6 +88,7 @@ sub send {
 	my $self = shift;
 	$self->{h} or return warn "Can't send() without handle at @{[ (caller)[1,2] ]}\n";
 	my $s = $self->_compose(@_);
+	$self->{debug_send_stanza} and $self->{debug_send_stanza}->($s);
 	my $buf = "$s";
 	$self->debug_send(\$buf);
 	utf8::encode $buf if utf8::is_utf8($buf);
@@ -105,6 +106,8 @@ sub new {
 
 sub init {
 	my $self = shift;
+	$self->{send_color} = "33";
+	$self->{recv_color} = "32";
 	$self->{debug}        ||= 0;
 	$self->{debug_stream} ||= 0;
 	$self->{connected}  = 0;
