@@ -86,7 +86,7 @@ sub _compose {
 
 sub send {
 	my $self = shift;
-	$self->{h} or return warn "Can't send() without handle at @{[ (caller)[1,2] ]}\n";
+	$self->{h} or return Carp::cluck "Can't send() without handle at @{[ (caller)[1,2] ]}\n";
 	my $s = $self->_compose(@_);
 	my $buf = "$s";
 	$self->debug_send(\$buf);
