@@ -6,6 +6,17 @@ sub replied { delete shift->[1];return }
 *noreply = \&replied;
 
 sub type { $_[0][2]{type} ||= $_[0][0]->getAttribute('type'); }
+sub subtype {
+	$_[0][2]{subtype} ||= do {eval{
+		my @ch = $_[0][0]->childNodes;
+		my $fc;
+		for (@ch) {
+			next if $_->isa('XML::LibXML::Text');
+			$fc = $_;
+		}
+		$fc->getAttribute('xmlns');
+	}};
+}
 sub query { $_[0][2]{query} ||= ( $_[0][0]->getElementsByTagName('query') )[0]; }
 
 sub reply {

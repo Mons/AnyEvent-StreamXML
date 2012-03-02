@@ -19,8 +19,20 @@ sub new {
 	return $self;
 }
 
+sub id   { $_[0][2]{id}   ||= $_[0][0]->getAttribute('id'); }
 sub from { $_[0][2]{from} ||= jid( $_[0][0]->getAttribute('from') ); }
 sub to   { $_[0][2]{to}   ||= jid( $_[0][0]->getAttribute('to') ); }
+
+sub clone {
+	my $self = shift;
+	my $reverse = shift;
+	my $node = $self->[0]->cloneNode(1);
+	if ($reverse) {
+		$node->setAttribute('from', $self->to );
+		$node->setAttribute('to', $self->from );
+	}
+	return ref($self)->new( $node, $self->[1] );
+}
 
 our $AUTOLOAD;
 sub  AUTOLOAD {

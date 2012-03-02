@@ -31,6 +31,11 @@ sub feature {
 	}
 }
 
+sub nextid {
+	my $self = shift;
+	return 'cm-'.$self->{seq}++;
+}
+
 sub init {
 	my $self = shift;
 	$self->next::method(@_);
@@ -39,6 +44,7 @@ sub init {
 	$self->{password} or croak "Need <password>";
 	$self->{stream_ns} = ns('component_accept') unless defined $self->{stream_ns};
 	$self->{port} ||= 5275;
+	$self->{use_ping} = 1 unless defined $self->{use_ping};
 
 	$self->{disco}{ identity }{ category } ||= 'gateway';
 	$self->{disco}{ identity }{ type }     ||= 'xmpp';
@@ -59,7 +65,7 @@ sub init {
 	$self->{stanza_handlers}{presence} = sub {
 		$self or return;
 		$self->event(presence => AnyEvent::StreamXML::XMPP::Presence->new($_[0],$self));
-	};
+	} if 0;
 	$self->{stanza_handlers}{iq} = sub {
 		$self or return;
 		my $node = shift;
@@ -107,11 +113,11 @@ sub init {
 			}
 			#};warn if $@;
 		}
-	};
+	} if 0;
 	$self->{stanza_handlers}{message} = sub {
 		$self or return;
 		$self->event(message => AnyEvent::StreamXML::XMPP::Message->new($_[0],$self));
-	};
+	} if 0;
 	$self->{handlers}{StreamEnd} ||= sub {
 		$self or return;
 		warn "Received graceful disconnect (</stream>). Send response and reconnect...";
@@ -173,7 +179,7 @@ sub init {
 								$features->{ rns( $_->getAttribute('var') ) }++;
 							}
 							#warn dumper [ $self->{server} ];
-							if ( exists $self->{server}{features}{ping} ) {
+							if ( exists $self->{server}{features}{ping} and $self->{use_ping} ) {
 								weaken $c;
 								$c or return;
 								

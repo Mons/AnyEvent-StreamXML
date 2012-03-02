@@ -20,20 +20,26 @@ sub init {
 	my $self = shift;
 	$self->{seq} = 'aaaaa';
 	$self->{jid} or croak "Need 'jid'";
+	$self->{jid} = AnyEvent::StreamXML::XMPP::JID->new($self->{jid}) unless ref $self->{jid};
 	$self->{stream_ns} = ns('component_accept') unless defined $self->{stream_ns};
 	$self->next::method();
 	$self->{stanza_handlers}{presence} = sub {
 		$self or return;
-		$self->event(presence => AnyEvent::StreamXML::XMPP::Presence->new($_[0],$self));
+		my $s = AnyEvent::StreamXML::XMPP::Presence->new($_[0],$self);
+		$self->{debug_recv_stanza} and $self->{debug_recv_stanza}($s);
+		$self->event(presence => $s);
 	};
 	$self->{stanza_handlers}{message} = sub {
 		$self or return;
-		$self->event(message => AnyEvent::StreamXML::XMPP::Message->new($_[0],$self));
+		my $s = AnyEvent::StreamXML::XMPP::Message->new($_[0],$self);
+		$self->{debug_recv_stanza} and $self->{debug_recv_stanza}($s);
+		$self->event(message => $s);
 	};
 	$self->{stanza_handlers}{iq} = sub {
 		$self or return;
 		my $node = shift;
 		my $s = AnyEvent::StreamXML::XMPP::Iq->new($node, $self);
+		$self->{debug_recv_stanza} and $self->{debug_recv_stanza}($s);
 		my $type = $s->getAttribute('type');
 		if ($type eq 'result' or $type eq 'error') {
 			$s->noreply();
@@ -68,8 +74,18 @@ sub init {
 					# TODO: exception handler
 					$self->event( $event => $s, $query );
 				} else {
-					warn "iq query.$ns (event $event) not handled";
-					$s->error('not-acceptable', { iq => { -from => $self->{jid} } });
+					if ($ns eq ns('version')) {
+						$s->reply({iq => {
+							query => {
+								-xmlns => $ns,
+								name => 'AnyEvent::StreamXML',
+								version => $AnyEvent::StreamXML::VERSION,
+							},
+						}})
+					} else {
+						warn "iq query.$ns (event $event) not handled";
+						$s->error('not-acceptable', { iq => { -from => $self->{jid} } });
+					}
 				}
 			} else {
 				if( my $tag = $s->firstChild ) {
@@ -79,6 +95,23 @@ sub init {
 							return $self->event( $nn => $s );
 						} else {
 							$s->reply();
+							return;
+						}
+					}
+					elsif ($nn eq 'time') {
+						if ( $self->handles( $nn ) ) {
+							return $self->event( $nn => $s );
+						} else {
+							use POSIX 'strftime';
+							my $off = strftime("%z",gmtime(time));
+							$off =~ s{(?=\d{2}$)}{:};
+							$s->reply({iq => {
+								time => {
+									-xmlns => ns('time'),
+									tzo => $off,
+									utc => strftime('%Y-%m-%dT%H:%M:%SZ',gmtime()),
+								},
+							}});
 							return;
 						}
 					}
@@ -100,7 +133,7 @@ sub init {
 
 sub nextid {
 	my $self = shift;
-	return 'ae-'.$self->{seq}++;
+	return 'xm-'.$self->{seq}++;
 }
 
 sub send_start {
@@ -169,7 +202,7 @@ sub reply {
 	ref $s or die "Can't sent $_[0] as a reply to $iq at @{[ (caller)[1,2] ]}\n";
 	$s->setAttribute( type => 'result' ) unless $s->getAttribute('type');
 	$s->setAttribute( from => $self->{jid} );
-	$s->setAttribute( to => $iq->getAttribute('from') );
+	$s->setAttribute( to => $iq->getAttribute('from') ) if $iq->getAttribute('from');
 	$s->setAttribute( id => $iq->getAttribute('id') );
 	#warn "Composed reply: ".$s;
 	my $rq = ($s->getElementsByTagName('query'))[0];
@@ -225,7 +258,7 @@ sub error {
 	ref $s or die "Can't sent $_[0] as a reply to $iq at @{[ (caller)[1,2] ]}\n";
 	$s->setAttribute( type => 'error' ) unless $s->getAttribute('type');
 	$s->setAttribute( from => $self->{jid} );
-	$s->setAttribute( to => $iq->getAttribute('from') );
+	$s->setAttribute( to => $iq->getAttribute('from') ) if $iq->getAttribute('from');
 	$s->setAttribute( id => $iq->getAttribute('id') );
 	
 	my $e = XML::LibXML::Element->new('error');
