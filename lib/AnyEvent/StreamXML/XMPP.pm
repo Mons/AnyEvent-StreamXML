@@ -74,8 +74,18 @@ sub init {
 					# TODO: exception handler
 					$self->event( $event => $s, $query );
 				} else {
-					warn "iq query.$ns (event $event) not handled";
-					$s->error('not-acceptable', { iq => { -from => $self->{jid} } });
+					if ($ns eq ns('version')) {
+						$s->reply({iq => {
+							query => {
+								-xmlns => $ns,
+								name => 'AnyEvent::StreamXML',
+								version => $AnyEvent::StreamXML::VERSION,
+							},
+						}})
+					} else {
+						warn "iq query.$ns (event $event) not handled";
+						$s->error('not-acceptable', { iq => { -from => $self->{jid} } });
+					}
 				}
 			} else {
 				if( my $tag = $s->firstChild ) {
@@ -85,6 +95,23 @@ sub init {
 							return $self->event( $nn => $s );
 						} else {
 							$s->reply();
+							return;
+						}
+					}
+					elsif ($nn eq 'time') {
+						if ( $self->handles( $nn ) ) {
+							return $self->event( $nn => $s );
+						} else {
+							use POSIX 'strftime';
+							my $off = strftime("%z",gmtime(time));
+							$off =~ s{(?=\d{2}$)}{:};
+							$s->reply({iq => {
+								time => {
+									-xmlns => ns('time'),
+									tzo => $off,
+									utc => strftime('%Y-%m-%dT%H:%M:%SZ',gmtime()),
+								},
+							}});
 							return;
 						}
 					}

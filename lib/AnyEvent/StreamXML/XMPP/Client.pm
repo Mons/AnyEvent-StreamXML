@@ -49,7 +49,7 @@
 		$self->next::method();
 		$self->{jid} or croak "Need 'jid'";
 		ref $self->{jid} or $self->{jid} = AnyEvent::StreamXML::XMPP::JID->new($self->{jid});
-		$self->{resource} = $self->{jid}->res || 'ae-sxml-xmpp'; $self->{jid}->res(undef);
+		$self->{resource} //= $self->{jid}->res || 'ae-sxml-xmpp'; $self->{jid}->res(undef);
 		$self->{handlers}{StreamStart} = sub {
 			$self->{stream} = xml2hash(shift)->{'stream:stream'};
 			#warn "stream_start ".dumper $self->{stream};
@@ -106,6 +106,7 @@
 			$self->{h}->timeout(0);
 			my @next;@next = (
 				sub {
+					#warn "bind $self->{jid} / $self->{resource}";
 					$self->request({
 						iq => {
 							-type => 'set',
