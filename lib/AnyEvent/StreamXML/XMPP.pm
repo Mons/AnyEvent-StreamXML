@@ -18,7 +18,7 @@ use AnyEvent::StreamXML::XMPP::JID;
 
 sub init {
 	my $self = shift;
-	$self->{seq} = 'aaaaa';
+	$self->{seq}      ||= 'aaaaa';
 	$self->{jid} or croak "Need 'jid'";
 	$self->{jid} = AnyEvent::StreamXML::XMPP::JID->new($self->{jid}) unless ref $self->{jid};
 	$self->{stream_ns} = ns('component_accept') unless defined $self->{stream_ns};
@@ -88,7 +88,13 @@ sub init {
 					}
 				}
 			} else {
-				if( my $tag = $s->firstChild ) {
+				my $tag;
+				for my $child ($s->childNodes) {
+					next if ($child->isa('XML::LibXML::Text'));
+					$tag = $child;
+					last;
+				}
+				if( $tag ) {
 					my $nn = $tag->nodeName;
 					if ($nn eq 'ping') {
 						if ( $self->handles( $nn ) ) {
@@ -133,7 +139,7 @@ sub init {
 
 sub nextid {
 	my $self = shift;
-	return 'xm-'.$self->{seq}++;
+	return ($self->{seq_pref} || 'xm').'-'.$self->{seq}++;
 }
 
 sub send_start {
@@ -190,6 +196,7 @@ sub request {
 		$rq->( undef, "Response timeout" );
 	};
 	$self->send( $s->toString() );
+	return $id;
 }
 
 sub reply {

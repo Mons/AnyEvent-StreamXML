@@ -11,10 +11,6 @@
 	use MIME::Base64 qw(encode_base64 decode_base64);
 	use Scalar::Util 'weaken';
 
-	sub nextid {
-		my $self = shift;
-		return 'cl-'.$self->{seq}++;
-	}
 	
 	sub auth_plain {
 		my $self = shift;
@@ -47,6 +43,7 @@
 		my $self = shift;
 		$self->{stream_ns} = ns('client') unless defined $self->{stream_ns};
 		$self->next::method();
+		$self->{seq_pref} ||= 'cl';
 		$self->{jid} or croak "Need 'jid'";
 		ref $self->{jid} or $self->{jid} = AnyEvent::StreamXML::XMPP::JID->new($self->{jid});
 		$self->{resource} //= $self->{jid}->res || 'ae-sxml-xmpp'; $self->{jid}->res(undef);
