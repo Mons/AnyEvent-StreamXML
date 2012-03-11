@@ -31,14 +31,10 @@ sub feature {
 	}
 }
 
-sub nextid {
-	my $self = shift;
-	return 'cm-'.$self->{seq}++;
-}
-
 sub init {
 	my $self = shift;
 	$self->next::method(@_);
+	$self->{seq_pref} ||= 'cm';
 	$self->{name} or carp "It's recommended to setup a component name";
 	$self->{jid} or croak "Need <jid>";
 	$self->{password} or croak "Need <password>";
