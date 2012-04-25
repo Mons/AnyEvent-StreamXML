@@ -51,6 +51,7 @@ our %NS = (
         xhtml_im             => 'http://jabber.org/protocol/xhtml-im',
         xdata_layout         => 'http://jabber.org/protocol/xdata-layout',
         xdata_validate       => 'http://jabber.org/protocol/xdata-validate',
+        jinglenodes          => 'http://jabber.org/protocol/jinglenodes',
         client               => 'jabber:client',
         component_accept     => 'jabber:component:accept',
         component_connect    => 'jabber:component:connect',
