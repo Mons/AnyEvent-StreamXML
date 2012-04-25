@@ -49,7 +49,7 @@ sub init {
 				my $cb = delete $self->{req}{$id};
 				if ($type eq 'error') {
 					my ($err,$etext);
-					if (($err) = $s->getElementsByTagName('error') and $err = $err->firstChild) {
+					if (($err) = $s->getElementsByTagName('error') and do{ ($err) = grep { $_->isa('XML::LibXML::Element') } $err->childNodes; $err } ) {
 						$etext = $err->nodeName;
 					} else {
 						$etext = "Stanza type error";
