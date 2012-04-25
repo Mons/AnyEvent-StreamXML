@@ -59,7 +59,7 @@ sub init {
 					$cb->( $s );
 				}
 			} else {
-				warn "No callback for id $id";
+				warn "No callback for id $id: $s ";
 			}
 		}
 		else {

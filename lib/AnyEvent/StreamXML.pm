@@ -86,9 +86,14 @@ sub _compose {
 
 sub send {
 	my $self = shift;
-	$self->{h} or return warn "Can't send() without handle at @{[ (caller)[1,2] ]}\n";
+	$self->{h} or return Carp::cluck "Can't send() without handle at @{[ (caller)[1,2] ]}\n";
 	my $s = $self->_compose(@_);
 	$self->{debug_send_stanza} and $self->{debug_send_stanza}->($s);
+	#eval {
+	#	if ($s->nodeName eq 'iq' and $s->getAttribute('type') ne 'result') {
+	#		warn "$s";
+	#	}
+	#};
 	my $buf = "$s";
 	$self->debug_send(\$buf);
 	utf8::encode $buf if utf8::is_utf8($buf);
