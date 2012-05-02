@@ -11,6 +11,8 @@ use Event::Emitter;
 use AnyEvent::Socket;
 use AnyEvent::Handle;
 
+#use XML::Fast::Stream;
+
 use XML::Parser;
 use XML::Parser::Style::XMPP;
 use Try::Tiny;
@@ -39,7 +41,7 @@ sub debug_recv {
 	my $time = strftime( '%b %d %H:%M:%S', localtime() );
 	utf8::encode($buf) if utf8::is_utf8($buf);
 	binmode STDOUT, ':raw';
-	print STDOUT "\e[0;37m$time in \e[1;$self->{send_color}m>>\t\e[0;$self->{recv_color}m$buf\e[0m\n";
+	print STDOUT "\e[0;37m$time in \e[1;$self->{recv_color}m>>\t\e[0;$self->{recv_color}m$buf\e[0m\n";
 
 }
 
@@ -282,7 +284,7 @@ sub _disconnected {
 		catch { warn $_ }
 		delete $self->{h};
 	}}
-	warn "Disconnected\n" if $self->{debug} or $self->{debug_stream};
+	warn "Disconnected\n" if $self->{debug};# or $self->{debug_stream};
 	$self->_cleanup;
 	return;
 }

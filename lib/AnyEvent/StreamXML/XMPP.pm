@@ -123,7 +123,7 @@ sub init {
 					}
 					my $ns = $tag->getAttribute('xmlns');
 					my $event = $ns ne $s->getAttribute('xmlns') ? rns($ns) : $tag->nodeName;
-					warn "iq without query but with $tag / ".$tag->nodeName.'/xmlns='.$ns."; emitting event $event";
+					#warn "iq without query but with $tag / ".$tag->nodeName.'/xmlns='.$ns."; emitting event $event";
 					if ($self->handles( $event )) {
 						$self->event( $event => $s );
 						return;
