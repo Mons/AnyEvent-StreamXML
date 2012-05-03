@@ -8,10 +8,13 @@ use warnings;
 use Carp;
 
 use Event::Emitter;
+use parent 'AnyEvent::CNN::RW';
+use AnyEvent::RW;
+
 use AnyEvent::Socket;
 use AnyEvent::Handle;
 
-#use XML::Fast::Stream;
+use XML::Fast::Stream;
 
 use XML::Parser;
 use XML::Parser::Style::XMPP;
@@ -102,7 +105,7 @@ sub send {
 	$self->{h}->push_write( $buf."\n" );
 	return;
 }
-
+=for rem
 sub new {
 	my $pk = shift;
 	my $self = bless {@_}, $pk;
@@ -110,183 +113,123 @@ sub new {
 	$self->init();
 	return $self;
 }
-
+=cut
 sub init {
 	my $self = shift;
+	$self->{debug} //= 0;
+	$self->{timeout}  ||= 3;
+	$self->next::method(@_);
 	$self->{send_color} = "33";
 	$self->{recv_color} = "32";
-	$self->{debug}        ||= 0;
 	$self->{debug_stream} ||= 0;
-	$self->{connected}  = 0;
-	$self->{connecting} = 0;
-	$self->{reconnect}  = 1 unless defined $self->{reconnect};
-	$self->{timeout}  ||= 3;
 	$self->{timers}     = {};
 	$self->{_}          = {}; # some shit, like guards
 	$self->{h}          = undef; # AE::Handle
+	$self->{buffer_size} //= 8*1024,
 	$self->on(__DIE__ => sub {
 		my ($err, $e ) = @_;
 		my ( $ev,$obj,@args ) = @{ $self->{__oe_exception_rec} };
 		@args = () if $ev ne $e;
 		warn "Unhandled exception on event $e: <$err> (@args)";
-=for rem
-		my $type;
-		if (
-			UNIVERSAL::isa( $args[0], 'Virtus::Reg::Stanza::Iq' )
-			or (
-				UNIVERSAL::isa( $args[0], 'XML::LibXML::Node' )
-				and $args[0]->nodeName eq 'iq'
-				and $type = $args[0]->getAttribute('type')
-				and ( $type eq 'get' or $type eq 'set' )
-			)
-		) {
-			warn "Unhandled exception during iq processing ($e) <$err>. Send 500";
-			$self->error($args[0],'internal-server-error');
-		} else {
-			warn "Unhandled exception on event $e: <$err>";
-		}
-=cut
 	});
 	
 	return;
 }
 
 
-sub connect {
-	my $self = shift;
-	$self->{connecting} and return;
-	$self->{connecting} = 1;
-	weaken $self;
-	warn "Connecting to $self->{host}:$self->{port}..." if $self->{debug};
-	$self->{_}{con}{cb} = sub {
-		pop;
-		delete $self->{_}{con};
-		if (my $fh = shift) {
-			$self->{connecting} = 0;
-			$self->{connected} = 1;
-			$self->_connected($fh,@_);
-		} else {
-			$self->event(connfail => "$!");
-			$self->_reconnect_after(); # watches for connected/connecting
-		}
-	};
-	$self->{_}{con}{pre} = sub { $self->{timeout} };
-	$self->{_}{con}{grd} =
-		AnyEvent::Socket::tcp_connect
-			$self->{host}, $self->{port},
-			$self->{_}{con}{cb}, $self->{_}{con}{pre}
-	;
-	return;
-}
-
 sub _make_parser {
 	weaken(my $self = shift);
+	$self->{lxml} = XML::LibXML->new;
+	
 	$self->{stanza_handlers}{''} ||=  sub {
-		warn "Stanza";
 		$self->handles('stanza') or return warn "event `stanza' not handled\n$_[0]\n";
 		$self->event(stanza => @_);
 	};
 	$self->{handlers}{StreamStart} ||= sub {
+		$self->{stream_start_tag} = $_[1];
+		$self->{stream_end_tag} = '</'.$_[0].'>';
+		
+		shift;
+		$_[0] = $self->{lxml}->parse_string(
+			$self->{stream_start_tag}.$self->{stream_end_tag}
+		)->documentElement;
+		
 		$self->{h}->timeout(undef);
 		$self->handles('stream_ready') or return warn "event `stream_ready' not handled\n";
 		$self->event( stream_ready => @_ );
 	};
-	$self->{handlers}{Stanza} ||= $self->{stanza_handlers};
+	$self->{handlers}{Stanza}    ||= $self->{stanza_handlers};
 	$self->{handlers}{StreamEnd} ||= sub {
 		#warn "StreamEnd";
 		$self->handles('stream_end') or return warn "event `stream_end' not handled\n";
 		$self->event( stream_end => @_  )
 	};
-	my $parser = XML::Parser->new(
-		Style => 'XMPP',
-		On => $self->{handlers},
-	);
-	my $sax = $parser->parse_start();
-	$self->{parser} = $sax;
-}
-
-sub _connected {
-	my ($self,$fh,$host,$port) = @_;
-	# Create handle, parser, etc...
-	weaken($self);
-	$self or return warn("self immediately destroyed?");
-	
-	$self->_make_parser();
-	delete $self->{sent_end};
-	
-	$self->{cb}{eof} = sub {
-		$self or return;
-		warn "Eof on handle" if $self->{debug};
-		try { $self->{h}->destroy; }
-		catch { warn $_ };
-		delete $self->{h};
-		$self->disconnect();
-		$self->_reconnect_after();
-	};
-	
-	$self->{cb}{err} = sub {
-		$self or return;
-		my $e = "$!";
-		warn "Error $e on handle" if $self->{debug};
-		try { $self->{h}->destroy; }
-		catch { warn $_ };
-		delete $self->{h};
-		if (!$self->{destroying} and $self->{sent_end} and $!{ETIMEDOUT}) {
-			#$self->_reconnect_after(); # watches for connected/connecting
-			$self->disconnect();
-			$self->_reconnect_after();
-			return;
-		}
-		if ($self->{destroying}) {
-			$e = "Connection closed";
-		}
-		warn "Error on handle: $e";# if $self->{debug};
-		$self->disconnect("Error: $e");
-		$self->_reconnect_after(); # watches for connected/connecting
-	};
-	
-	$self->{cb}{read} = sub {
-		$self and $self->{parser} or return;
-		my $h = shift;
-		$self->debug_recv(\$h->{rbuf});
-		try {
-			$self->{parser}->parse_more( substr($h->{rbuf},0,length($h->{rbuf}),'') );
-		}
-		catch {
-			warn "Parse died <$_>.";
-			$self->disconnect("Error: $_");
-			$self->_reconnect_after(); # watches for connected/connecting
-		};
-	};
-	
-	$self->{h} = AnyEvent::Handle->new(
-		fh => $fh,
-		autocork  => 1,
-		keepalive => 1,
-		#timeout   => 10,
-		on_eof    => $self->{cb}{eof},
-		on_error  => $self->{cb}{err},
-		on_read   => $self->{cb}{read},
-	);
-	
-	warn "Connected to $host:$port ($self->{h})\n" if $self->{debug};
-	
-	$self->{h}->timeout(10);
-	$self->send_start;
-	$self->event( connected => () );
-}
-
-sub _disconnected {
-	my $self = shift;
-	# Destroy handle, parser, etc...
-	if ($self->{h}) {{
-		try { $self->{h}->destroy; };
-		catch { warn $_ }
-		delete $self->{h};
-	}}
-	warn "Disconnected\n" if $self->{debug};# or $self->{debug_stream};
-	$self->_cleanup;
+	$self->{parser} = XML::Fast::Stream->new({
+		buffer => $self->{buffer_size},
+		open   => $self->{handlers}{StreamStart},
+		read   => sub {
+			my $tag = shift;
+			$_[0] = $self->{lxml}->parse_string(
+				$self->{stream_start_tag}.$_[0].$self->{stream_end_tag}
+			)->documentElement->firstChild;
+			goto &{ 
+				exists $self->{handlers}{Stanza}{$tag}
+					?  $self->{handlers}{Stanza}{$tag}
+					:  $self->{handlers}{Stanza}{''}
+			};
+		},
+		close => $self->{handlers}{StreamEnd},
+	});
 	return;
+}
+
+sub _recv_data {
+	my $self = shift;
+	$self->{parser}->parse( ${ $_[0] } );
+}
+
+sub _on_connected_prepare {
+	my ($self,$fh,$host,$port) = @_;
+	#warn "success: @_";
+	weaken $self;
+	$self->_make_parser;
+	$self->{h} = AnyEvent::RW->new(
+		fh    => $self->{fh},
+		debug => $self->{debug},
+		timeout => $self->{timeout},
+		read_size => $self->{buffer_size}, max_read_size => $self->{buffer_size},
+		on_read => sub {
+			$self or return;
+			$self->debug_recv($_[0]);
+			$self->_recv_data($_[0]);
+		},
+		on_end => sub {
+			$self or return;
+			warn "discon: @_";
+			$self->disconnect(@_ ? @_ : "$!");
+			$self->_reconnect_after;
+		}
+	);
+	$self->send_start;
+}
+
+sub _on_connected_success {
+	my ($self,$fh,$host,$port,$cb) = @_;
+	$self->_on_connected_prepare($fh,$host,$port);
+	$cb->($host,$port) if $cb;
+	if ($self->handles('connected')) {
+		$self->event( connected => ($host,$port) );
+	}
+	elsif (!$cb) {
+		#warn "connected not handled!" ;
+	}
+}
+
+sub disconnect {
+	my $self = shift;
+	#warn "Disconnect @_";
+	$self->next::method(@_);
+	$self->_cleanup;
 }
 
 sub _cleanup {
@@ -301,35 +244,6 @@ sub _cleanup {
 sub cleanup {
 	my $self = shift;
 	push @{ $self->{clean} ||= [] }, @_;
-	return;
-}
-
-sub _reconnect_after {
-	weaken( my $self = shift );
-	$self->{reconnect} or return $self->{connecting} = 0;
-	$self->{timers}{reconnect} = AE::timer $self->{reconnect},0,sub {
-		$self or return;
-		delete $self->{timers}{reconnect};
-		$self->{connecting} = 0;
-		$self->connect;
-	};
-	return;
-}
-
-sub reconnect {
-	my $self = shift;
-	$self->disconnect(@_);
-	$self->connect;
-}
-
-sub disconnect {
-	my $self = shift;
-	my $wascon = $self->{connected} || $self->{connecting};
-	$self->send_end if $self->{connected};
-	$self->_disconnected;
-	$self->{connected}  = $self->{connecting} =  0;
-	delete $self->{timers}{reconnect};
-	$self->event('disconnect',@_) if $wascon;
 	return;
 }
 

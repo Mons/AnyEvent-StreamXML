@@ -133,8 +133,8 @@ sub init {
 			if (( !$self->{jid} or $self->{jid} !~ /\./) and $stream->getAttribute('from') ) {
 				$self->{jid} = jid($stream->getAttribute('from'));
 			}
-			($self->{server}{domain}) = $self->{jid} =~ /^[^.]+\.(.+)$/;
-			warn "Started on domain $self->{server}{domain}";
+			($self->{xmppserver}{domain}) = $self->{jid} =~ /^[^.]+\.(.+)$/;
+			warn "Started on domain $self->{xmppserver}{domain}";
 			$c->send({
 				handshake => {
 					-from => $self->{jid},
@@ -158,24 +158,24 @@ sub init {
 				}
 			});
 			if (! $iq->from->user) {
-				unless ($self->{server}{features}) {
+				unless ($self->{xmppserver}{features}) {
 					$c->request({
 						iq => {
-							-to => $self->{server}{domain}, # Ask our server about disco
+							-to => $self->{xmppserver}{domain}, # Ask our server about disco
 							query => { -xmlns => ns( 'disco_info' ) },
 						},
 					}, sub {
 						if (my $iq = shift) {
 							#warn "response: $iq";
-							$self->cleanup(sub{ delete $self->{server} });
+							$self->cleanup(sub{ delete $self->{xmppserver} });
 							my ($query) = $iq->getElementsByTagName('query');
 							my (@features) = $query->getElementsByTagName('feature');
-							my $features = $self->{server}{features} ||= {};
+							my $features = $self->{xmppserver}{features} ||= {};
 							for ($query->getElementsByTagName('feature')) {
 								$features->{ rns( $_->getAttribute('var') ) }++;
 							}
-							#warn dumper [ $self->{server} ];
-							if ( exists $self->{server}{features}{ping} and $self->{use_ping} ) {
+							#warn dumper [ $self->{xmppserver} ];
+							if ( exists $self->{xmppserver}{features}{ping} and $self->{use_ping} ) {
 								weaken $c;
 								$c or return;
 								
@@ -192,7 +192,7 @@ sub init {
 									
 									$c->request({
 										iq => {
-											-to => $self->{server}{domain}, # Ask our server about disco
+											-to => $self->{xmppserver}{domain}, # Ask our server about disco
 											query => { -xmlns => ns( 'ping' ) },
 										}
 									},sub {
