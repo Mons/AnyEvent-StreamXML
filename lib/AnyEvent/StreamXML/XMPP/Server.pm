@@ -65,8 +65,7 @@ sub init {
 		},
 	);
 
-	#$self->_on_connected_success($self->{fh});
-	$self->_connected($self->{fh});
+	$self->_on_connected_success($self->{fh});
 }
 
 sub send_start {}
