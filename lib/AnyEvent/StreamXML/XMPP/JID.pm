@@ -4,7 +4,7 @@ use strict;
 use Scalar::Util ();
 use overload
 	'""'     => sub { $_[0]->full },
-	'bool'   => sub { 1 },
+	'bool'   => sub { length $_[0]->full },
 	'0+'     => sub { Scalar::Util::refaddr($_[0]) },
 	fallback => 1;
 

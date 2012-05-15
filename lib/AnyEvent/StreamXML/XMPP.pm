@@ -67,7 +67,7 @@ sub init {
 				my $cb = delete $self->{req}{$id};
 				if ($type eq 'error') {
 					my ($err,$etext);
-					if (($err) = $s->getElementsByTagName('error') and $err = $err->firstChild) {
+					if (($err) = $s->getElementsByTagName('error') and do{ ($err) = grep { $_->isa('XML::LibXML::Element') } $err->childNodes; $err } ) {
 						$etext = $err->nodeName;
 					} else {
 						$etext = "Stanza type error";
@@ -141,7 +141,7 @@ sub init {
 					}
 					my $ns = $tag->getAttribute('xmlns');
 					my $event = $ns ne $s->getAttribute('xmlns') ? rns($ns) : $tag->nodeName;
-					warn "iq without query but with $tag / ".$tag->nodeName.'/xmlns='.$ns."; emitting event $event";
+					#warn "iq without query but with $tag / ".$tag->nodeName.'/xmlns='.$ns."; emitting event $event";
 					if ($self->handles( $event )) {
 						$self->event( $event => $s );
 						return;
