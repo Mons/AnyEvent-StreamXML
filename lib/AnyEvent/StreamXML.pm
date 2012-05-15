@@ -98,6 +98,7 @@ sub send {
 	$self->debug_send(\$buf);
 	utf8::encode $buf if utf8::is_utf8($buf);
 	$self->{h}->push_write( $buf."\n" );
+	$self->{counters} and $self->{counters}{traffic}{out} += length($buf)+1;
 	return;
 }
 
@@ -154,6 +155,13 @@ sub connect {
 	my $self = shift;
 	$self->{connecting} and return;
 	$self->{connecting} = 1;
+	if ($self->{counters}) {
+		if (defined $self->{counters}{status}{reconnections}) {
+			$self->{counters}{status}{reconnections}++;
+		} else {
+			$self->{counters}{status}{reconnections} = 0;
+		}
+	}
 	weaken $self;
 	warn "Connecting to $self->{host}:$self->{port}..." if $self->{debug};
 	$self->{_}{con}{cb} = sub {
@@ -164,6 +172,10 @@ sub connect {
 			$self->{connected} = 1;
 			$self->_connected($fh,@_);
 		} else {
+			if ($self->{counters}) {
+				$self->{counters}{status}{connfails}++;
+				$self->{counters}{status}{lastfail} = "$!";
+			}
 			$self->event(connfail => "$!");
 			$self->_reconnect_after(); # watches for connected/connecting
 		}
@@ -195,9 +207,30 @@ sub _make_parser {
 		$self->handles('stream_end') or return warn "event `stream_end' not handled\n";
 		$self->event( stream_end => @_  )
 	};
+	my $handlers;
+	if ($self->{counters}) {
+		$handlers = {
+			StreamStart => $self->{handlers}{StreamStart},
+			StreamEnd   => $self->{handlers}{StreamEnd},
+			Stanza      => {
+				'' => sub {
+					my $st = $_[0];
+					my $nn = $st->nodeName;
+					$self->{counters}{stanza}{ $nn }++;
+					goto &{
+						exists $self->{stanza_handlers}{$nn}
+							? $self->{stanza_handlers}{$nn}
+							: $self->{stanza_handlers}{''}
+					};
+				},
+			},
+		}
+	} else {
+		$handlers = $self->{handlers};
+	}
 	my $parser = XML::Parser->new(
 		Style => 'XMPP',
-		On => $self->{handlers},
+		On => $handlers,
 	);
 	my $sax = $parser->parse_start();
 	$self->{parser} = $sax;
@@ -211,6 +244,21 @@ sub _connected {
 	
 	$self->_make_parser();
 	delete $self->{sent_end};
+	
+	if( $self->{counters} ) {
+		if (exists $self->{counters}{traffic}{in}) {
+			my $t = delete $self->{counters}{traffic};
+			my $s = delete $self->{counters}{stanza};
+			#delete $t->{prev};delete $s->{prev};
+			$self->{counters}{traffic} = { prev => $t };
+			$self->{counters}{stanza} = { prev => $s };
+		} else {
+			$self->{counters}{traffic} = { in => 0, out => 0, };
+			$self->{counters}{stanza}  = {  };
+		}
+		$self->{counters}{status}{connected} = 1;
+	}
+	
 	
 	$self->{cb}{eof} = sub {
 		$self or return;
@@ -247,6 +295,7 @@ sub _connected {
 		$self and $self->{parser} or return;
 		my $h = shift;
 		$self->debug_recv(\$h->{rbuf});
+		$self->{counters} and $self->{counters}{traffic}{in} += length $h->{rbuf};
 		try {
 			$self->{parser}->parse_more( substr($h->{rbuf},0,length($h->{rbuf}),'') );
 		}
@@ -277,6 +326,7 @@ sub _connected {
 sub _disconnected {
 	my $self = shift;
 	# Destroy handle, parser, etc...
+	$self->{counters} and $self->{counters}{status}{connected} = 1;
 	if ($self->{h}) {{
 		try { $self->{h}->destroy; };
 		catch { warn $_ }

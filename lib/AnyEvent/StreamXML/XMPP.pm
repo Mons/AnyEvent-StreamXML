@@ -41,6 +41,24 @@ sub init {
 		my $s = AnyEvent::StreamXML::XMPP::Iq->new($node, $self);
 		$self->{debug_recv_stanza} and $self->{debug_recv_stanza}($s);
 		my $type = $s->getAttribute('type');
+		if ($self->{counters}) {
+				my $tag;
+				for my $child ($s->childNodes) {
+					next if ($child->isa('XML::LibXML::Text'));
+					$tag = $child;
+					last;
+				}
+				if( $tag ) {
+					my $nn = $tag->nodeName;
+					if (my $attr = $tag->getAttribute('xmlns')) {
+						$nn .= '*'.rns($attr);
+					}
+					$self->{counters}{stanza}{'-iq'}{ $nn . '*'.$type }++;
+				} else {
+					my $nn = '*'.$type;
+					$self->{counters}{stanza}{'-iq'}{ $nn }++;
+				}
+		}
 		if ($type eq 'result' or $type eq 'error') {
 			$s->noreply();
 			# lookup by id
