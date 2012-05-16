@@ -1,3 +1,13 @@
+package # hide
+    XML::LibXML::Node;
+    use Scalar::Util ();
+    use overload
+        '""'   => sub { $_[0]->toString },
+        'bool' => sub { 1 },
+        '0+'   => sub { Scalar::Util::refaddr($_[0]) },
+        fallback => 1,
+    ;
+
 package AnyEvent::StreamXML;
 
 use 5.008008;
@@ -14,10 +24,10 @@ use AnyEvent::RW;
 use AnyEvent::Socket;
 use AnyEvent::Handle;
 
+use XML::Fast;
 use XML::Fast::Stream;
+use XML::LibXML;
 
-use XML::Parser;
-use XML::Parser::Style::XMPP;
 use Try::Tiny;
 
 use Scalar::Util 'weaken';
@@ -60,9 +70,10 @@ sub debug_send {
 
 sub ref2xml : method {
 	my $self = shift;
-	try { require XML::Hash::LX; }
-	catch { croak "Can't load XML::Hash::LX for hash 2 xml conversion. Either install it or redefine `hash2xml' method ($_)" };
-	XML::Hash::LX::hash2xml($_[0], 'doc' => 1)->documentElement;
+	XML::Fast::hash2xml( $_[0] );
+	#try { require XML::Hash::LX; }
+	#catch { croak "Can't load XML::Hash::LX for hash 2 xml conversion. Either install it or redefine `ref2xml' method ($_)" };
+	#XML::Hash::LX::hash2xml($_[0], 'doc' => 1)->documentElement;
 }
 
 sub _compose {
@@ -136,6 +147,15 @@ sub init {
 	return;
 }
 
+sub handler {
+	my ($self,$tag,$cb) = @_;
+	my $bak = $self->{handlers}{Stanza}{$tag};
+	$self->{handlers}{Stanza}{$tag} = $cb;
+	
+	defined wantarray and return guard {
+		$self->{handlers}{Stanza}{$tag} = $bak;
+	};
+}
 
 sub _make_parser {
 	weaken(my $self = shift);
@@ -146,14 +166,7 @@ sub _make_parser {
 		$self->event(stanza => @_);
 	};
 	$self->{handlers}{StreamStart} ||= sub {
-		$self->{stream_start_tag} = $_[1];
-		$self->{stream_end_tag} = '</'.$_[0].'>';
-		
-		shift;
-		$_[0] = $self->{lxml}->parse_string(
-			$self->{stream_start_tag}.$self->{stream_end_tag}
-		)->documentElement;
-		
+		$self->{stream} = $_[0];
 		$self->{h}->timeout(undef);
 		$self->handles('stream_ready') or return warn "event `stream_ready' not handled\n";
 		$self->event( stream_ready => @_ );
@@ -164,12 +177,27 @@ sub _make_parser {
 		$self->handles('stream_end') or return warn "event `stream_end' not handled\n";
 		$self->event( stream_end => @_  )
 	};
+	delete $self->{parser};
+	warn "Create new parser";
 	$self->{parser} = XML::Fast::Stream->new({
 		buffer => $self->{buffer_size},
-		open   => $self->{handlers}{StreamStart},
+		open   => sub {
+			warn "open @_";
+			$self->{stream_start_tag} = $_[1];
+			$self->{stream_end_tag} = '</'.$_[0].'>';
+			shift;
+			warn "parse ".dumper $self->{stream_start_tag}.$self->{stream_end_tag};
+			my $doc = $self->{lxml}->parse_string(
+				$self->{stream_start_tag}.$self->{stream_end_tag}
+			)->documentElement;
+			
+			warn dumper $doc;
+			$self->{handlers}{StreamStart}($doc);
+		},
 		read   => sub {
 			my $tag = shift;
-			$_[0] = $self->{lxml}->parse_string(
+			warn "stanza @_";
+			($_[0]) = $self->{lxml}->parse_string(
 				$self->{stream_start_tag}.$_[0].$self->{stream_end_tag}
 			)->documentElement->firstChild;
 			goto &{ 

@@ -175,7 +175,9 @@ sub request {
 	my $self = shift;
 	my $cb = pop;
 	my $s = $self->_compose(@_);
+	$s = $self->{lxml}->parse_string( $s )->documentElement unless ref $s;
 	#return $cb->(undef, "No 'to' attribute'") unless $s->getAttribute('to');
+	warn "composed: ".dumper $s;
 	my $id = $s->getAttribute('id');
 	unless ($id) {
 		$id = $self->nextid;
@@ -205,7 +207,15 @@ sub reply {
 	if (!@_) {
 		@_ = ({ iq => {} });
 	}
+	my $r = $_[0]{iq};
 	my $s = $self->_compose(@_);
+	warn "reply: $s";
+	$r->{-type} ||= 'result';
+	$r->{-from} = $self->{jid};
+	$r->{-to} = $iq->getAttribute('from') if $iq->getAttribute('from');
+	my $s = $self->_compose(@_);
+	warn "reply: $s";
+	$s = $self->{lxml}->parse_string( $s )->documentElement unless ref $s;
 	ref $s or die "Can't sent $_[0] as a reply to $iq at @{[ (caller)[1,2] ]}\n";
 	$s->setAttribute( type => 'result' ) unless $s->getAttribute('type');
 	$s->setAttribute( from => $self->{jid} );

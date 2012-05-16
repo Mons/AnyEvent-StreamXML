@@ -48,6 +48,7 @@
 		ref $self->{jid} or $self->{jid} = AnyEvent::StreamXML::XMPP::JID->new($self->{jid});
 		$self->{resource} //= $self->{jid}->res || 'ae-sxml-xmpp'; $self->{jid}->res(undef);
 		$self->{handlers}{StreamStart} = sub {
+			#warn dumper \@_;
 			$self->{stream} = xml2hash(shift)->{'stream:stream'};
 			#warn "stream_start ".dumper $self->{stream};
 		};
