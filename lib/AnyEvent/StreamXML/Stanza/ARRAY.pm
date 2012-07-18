@@ -25,7 +25,7 @@ sub  AUTOLOAD {
 		if (wantarray) {
 			return @a;
 		} else {
-			return Stanza::ARRAY->new(\@a);
+			return + (ref $av)->new(\@a);
 		}
 	};
 	goto &$n;

@@ -18,8 +18,7 @@ use warnings;
 use Carp;
 
 use Event::Emitter;
-use parent 'AnyEvent::CNN::RW';
-use AnyEvent::RW;
+use parent 'AnyEvent::CNN::Hdl';
 
 use AnyEvent::Socket;
 use AnyEvent::Handle;
@@ -32,6 +31,10 @@ use Try::Tiny;
 
 use Scalar::Util 'weaken';
 use mro 'c3';
+
+use AnyEvent::StreamXML::Stanza;
+
+use POSIX 'strftime';
 
 =head1 ATTRS
 
@@ -50,8 +53,10 @@ sub debug_recv {
 	my $rbuf = shift;
 	my $buf = $$rbuf;
 	substr($buf, -1) = '' while substr($buf, -1) eq "\n";
-	use POSIX 'strftime';
-	my $time = strftime( '%b %d %H:%M:%S', localtime() );
+	my $old  = POSIX::setlocale(POSIX::LC_ALL, "C");
+	my $time = POSIX::strftime( '%b %d %H:%M:%S', localtime() );
+	           POSIX::setlocale(POSIX::LC_ALL, $old);
+	           local $ENV{LC_ALL} = 'C';
 	utf8::encode($buf) if utf8::is_utf8($buf);
 	binmode STDOUT, ':raw';
 	print STDOUT "\e[0;37m$time in \e[1;$self->{recv_color}m>>\t\e[0;$self->{recv_color}m$buf\e[0m\n";
@@ -62,18 +67,17 @@ sub debug_send {
 	my $self = shift;
 	$self->{debug_stream} or return;
 	my $rbuf = shift;
-	use POSIX 'strftime';
-	my $time = strftime( '%b %d %H:%M:%S', localtime() );
+	my $old  = POSIX::setlocale(POSIX::LC_ALL, "C");
+	my $time = POSIX::strftime( '%b %d %H:%M:%S', localtime() );
+	           POSIX::setlocale(POSIX::LC_ALL, $old);
+	           local $ENV{LC_ALL} = 'C';
 	binmode STDOUT, ':raw';
 	print STDOUT "\e[0;37m$time ou \e[1;$self->{send_color}m<<\t\e[0;$self->{send_color}m$$rbuf\e[0m\n";
 }
 
 sub ref2xml : method {
 	my $self = shift;
-	XML::Fast::hash2xml( $_[0] );
-	#try { require XML::Hash::LX; }
-	#catch { croak "Can't load XML::Hash::LX for hash 2 xml conversion. Either install it or redefine `ref2xml' method ($_)" };
-	#XML::Hash::LX::hash2xml($_[0], 'doc' => 1)->documentElement;
+	AnyEvent::StreamXML::Stanza->new( $_[0] );
 }
 
 sub _compose {
@@ -130,8 +134,8 @@ sub init {
 	$self->{debug} //= 0;
 	$self->{timeout}  ||= 3;
 	$self->next::method(@_);
-	$self->{send_color} = "33";
-	$self->{recv_color} = "32";
+	$self->{send_color} //= "33";
+	$self->{recv_color} //= "32";
 	$self->{debug_stream} ||= 0;
 	$self->{timers}     = {};
 	$self->{_}          = {}; # some shit, like guards
@@ -148,18 +152,36 @@ sub init {
 }
 
 sub handler {
-	my ($self,$tag,$cb) = @_;
-	my $bak = $self->{handlers}{Stanza}{$tag};
-	$self->{handlers}{Stanza}{$tag} = $cb;
+	my $self = shift;
+	my %bak;
+	for (0..$#_/2) {
+		my ($tag,$cb) = @_[$_*2,$_*2+1];
+		if (exists $bak{$tag}) {
+			carp "Duplicate $tag handler. Merged";
+			my $nest = delete $self->{handlers}{Stanza}{$tag};
+			$self->{handlers}{Stanza}{$tag} = sub {
+				$nest->(@_);
+				$cb->(@_);
+			};
+		} else {
+			$bak{$tag} = $self->{handlers}{Stanza}{$tag};
+			$self->{handlers}{Stanza}{$tag} = $cb;
+		}
+	}
 	
 	defined wantarray and return guard {
-		$self->{handlers}{Stanza}{$tag} = $bak;
+		for my $tag (keys %bak) {
+			if (defined $bak{$tag}) {
+				$self->{handlers}{Stanza}{$tag} = $bak{$tag};
+			} else {
+				delete $self->{handlers}{Stanza}{$tag};
+			}
+		}
 	};
 }
 
 sub _make_parser {
 	weaken(my $self = shift);
-	$self->{lxml} = XML::LibXML->new;
 	
 	$self->{stanza_handlers}{''} ||=  sub {
 		$self->handles('stanza') or return warn "event `stanza' not handled\n$_[0]\n";
@@ -168,7 +190,7 @@ sub _make_parser {
 	$self->{handlers}{StreamStart} ||= sub {
 		$self->{stream} = $_[0];
 		$self->{h}->timeout(undef);
-		$self->handles('stream_ready') or return warn "event `stream_ready' not handled\n";
+		$self->handles('stream_ready') or return;# warn "event `stream_ready' not handled\n";
 		$self->event( stream_ready => @_ );
 	};
 	$self->{handlers}{Stanza}    ||= $self->{stanza_handlers};
@@ -178,28 +200,25 @@ sub _make_parser {
 		$self->event( stream_end => @_  )
 	};
 	delete $self->{parser};
-	warn "Create new parser";
+	#warn "Create new parser";
 	$self->{parser} = XML::Fast::Stream->new({
 		buffer => $self->{buffer_size},
 		open   => sub {
-			warn "open @_";
+			#warn "open @_";
 			$self->{stream_start_tag} = $_[1];
 			$self->{stream_end_tag} = '</'.$_[0].'>';
 			shift;
-			warn "parse ".dumper $self->{stream_start_tag}.$self->{stream_end_tag};
-			my $doc = $self->{lxml}->parse_string(
-				$self->{stream_start_tag}.$self->{stream_end_tag}
-			)->documentElement;
-			
-			warn dumper $doc;
-			$self->{handlers}{StreamStart}($doc);
+			#warn "parse ".dumper $self->{stream_start_tag}.$self->{stream_end_tag};
+			$self->{handlers}{StreamStart}( AnyEvent::StreamXML::Stanza->new( $self->{stream_start_tag}.$self->{stream_end_tag} ) );
 		},
 		read   => sub {
 			my $tag = shift;
-			warn "stanza @_";
-			($_[0]) = $self->{lxml}->parse_string(
-				$self->{stream_start_tag}.$_[0].$self->{stream_end_tag}
-			)->documentElement->firstChild;
+			eval { $_[0] = AnyEvent::StreamXML::Stanza->new( $_[0] ); 1} or do {
+				warn "Stanza create failed: $@";
+				return;
+			};
+			#warn "stanza @_";
+			#warn dumper $self->{handlers};
 			goto &{ 
 				exists $self->{handlers}{Stanza}{$tag}
 					?  $self->{handlers}{Stanza}{$tag}
@@ -216,41 +235,44 @@ sub _recv_data {
 	$self->{parser}->parse( ${ $_[0] } );
 }
 
+use AnyEvent::Handle;
+
 sub _on_connected_prepare {
 	my ($self,$fh,$host,$port) = @_;
 	#warn "success: @_";
 	weaken $self;
 	$self->_make_parser;
-	$self->{h} = AnyEvent::RW->new(
+	$self->{h} = AnyEvent::Handle->new(
 		fh    => $self->{fh},
 		debug => $self->{debug},
 		timeout => $self->{timeout},
 		read_size => $self->{buffer_size}, max_read_size => $self->{buffer_size},
 		on_read => sub {
 			$self or return;
-			$self->debug_recv($_[0]);
-			$self->_recv_data($_[0]);
+			$self->debug_recv(\$_[0]{rbuf});
+			$self->_recv_data(\delete $_[0]{rbuf});
 		},
-		on_end => sub {
+		on_error => sub {
 			$self or return;
-			warn "discon: @_";
+			warn "disconnect: @_";
 			$self->disconnect(@_ ? @_ : "$!");
 			$self->_reconnect_after;
-		}
+		},
+		on_eof => sub {
+			$self or return;
+			warn "disconnect: @_";
+			$self->disconnect(@_ ? @_ : "$!");
+			$self->_reconnect_after;
+		},
 	);
 	$self->send_start;
+	return 1;
 }
 
-sub _on_connected_success {
-	my ($self,$fh,$host,$port,$cb) = @_;
-	$self->_on_connected_prepare($fh,$host,$port);
-	$cb->($host,$port) if $cb;
-	if ($self->handles('connected')) {
-		$self->event( connected => ($host,$port) );
-	}
-	elsif (!$cb) {
-		#warn "connected not handled!" ;
-	}
+sub reconnect {
+	my $self = shift;
+	$self->disconnect(@_);
+	$self->_reconnect_after;
 }
 
 sub disconnect {

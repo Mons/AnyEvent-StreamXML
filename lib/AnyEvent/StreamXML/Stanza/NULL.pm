@@ -10,11 +10,11 @@ use overload
 our $NULL;
 
 sub new {
-	return defined $NULL ? $NULL : $NULL = bless \do { my $o }, $_[0];
+	return defined $NULL ? $NULL : $NULL = bless( \do { my $o }, $_[0] );
 }
 
 sub AUTOLOAD {
-	shift->new;
+	(ref shift)->new;
 }
 sub DESTROY {}
 

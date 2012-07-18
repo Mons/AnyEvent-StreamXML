@@ -7,7 +7,7 @@
 	use AnyEvent::StreamXML::XMPP::Presence;
 	use AnyEvent::StreamXML::XMPP::Message;
 	use AnyEvent::StreamXML::XMPP::JID;
-	use XML::Hash::LX;
+	use XML::Fast;
 	use MIME::Base64 qw(encode_base64 decode_base64);
 	use Scalar::Util 'weaken';
 
@@ -42,63 +42,59 @@
 	sub init {
 		my $self = shift;
 		$self->{stream_ns} = ns('client') unless defined $self->{stream_ns};
+		$self->{send_color} //= "34";
+		$self->{recv_color} //= "35";
 		$self->next::method();
 		$self->{seq_pref} ||= 'cl';
 		$self->{jid} or croak "Need 'jid'";
 		ref $self->{jid} or $self->{jid} = AnyEvent::StreamXML::XMPP::JID->new($self->{jid});
 		$self->{resource} //= $self->{jid}->res || 'ae-sxml-xmpp'; $self->{jid}->res(undef);
+=for rem
 		$self->{handlers}{StreamStart} = sub {
 			#warn dumper \@_;
 			$self->{stream} = xml2hash(shift)->{'stream:stream'};
 			#warn "stream_start ".dumper $self->{stream};
-		};
+		} if 0;
 		$self->{stanza_handlers}{'stream:error'} = sub {
 			my $s = shift;
-			$self->disconnect(eval{ $s->firstChild->nodeName } // "$s");
+			$self->disconnect(eval{ $s->child(0)->name } // "$s");
 		};
+=cut
 		$self->{stanza_handlers}{'stream:features'} = sub {
 			my $s = shift;
-			$self->{features} = {};
-			#warn dumper xml2hash($s)->{'stream:features'};
-
-			my $x;
-			if (($x) = $s->getElementsByTagName('bind')) {
-				$self->{features}{bind} = $x->getAttribute('xmlns');
-			}
-			if (($x) = $s->getElementsByTagName('session')) {
-				$self->{features}{session} = $x->getAttribute('xmlns');
-			}
-			if (($x) = $s->getElementsByTagName('starttls')) {
-				$self->{features}{starttls} = $x->getAttribute('xmlns');
-			}
-			if (($x) = $s->getElementsByTagName('mechanisms')) {
-				for my $mech ( $x->getElementsByTagName('mechanism') ) {
-					$self->{features}{mechanisms}{$mech->textContent}++;
-				}
-			}
-			
-			
-			if ($self->{use_ssl} and $self->{features}{starttls} and !$self->{ssl}) {
+			$self->{features} = $s;
+			my $features = $s;
+			if ($self->{use_ssl} and $features->starttls and !$self->{ssl}) {
+				warn "have starttls and want tls";
 				$self->{want_ssl_proceed} = 1;
 				$self->send('<starttls xmlns="urn:ietf:params:xml:ns:xmpp-tls"/>');
 				return;
 			}
 			
-			if ($self->{features}{mechanisms}) {
-				# Auth.
-				$self->auth_plain(sub {
-					#warn "auth: @_";
-					if (shift) {
-						weaken(my $c = $self);
-						$self->_make_parser;
-						$self->send_start;
-						return;
-					} else {
-						warn "Auth failure, disconnect";
-						$self->event("failure" => @_);
-						$self->disconnect("Auth failure");
-					}
-				});
+			if (my $mechs = $features->mechanisms('urn:ietf:params:xml:ns:xmpp-sasl')) {
+				#warn dumper scalar $mechs->mechanism;
+				if (0 and $mechs->mechanism eq 'DIGEST-MD5') {
+					warn "have md5";
+				}
+				elsif ($mechs->mechanism eq 'PLAIN') {
+					#warn "have plain";
+					$self->auth_plain(sub {
+						#warn "auth: @_";
+						if (shift) {
+							$self->_make_parser;
+							$self->send_start;
+							return;
+						} else {
+							warn "Auth failure, disconnect";
+							$self->event("failure" => @_);
+							$self->disconnect("Auth failure");
+						}
+					});
+					return;
+				}
+				else {
+					warn "No mechs";
+				}
 				return;
 			}
 			$self->{h}->timeout(0);
@@ -115,9 +111,8 @@
 						}
 					}, sub {
 						if (my $iq = shift) {
-							my ($jid) = $iq->getElementsByTagName('jid');
-							if ($jid) {
-								$self->{jid} = AnyEvent::StreamXML::XMPP::JID->new($jid->textContent);
+							if (my $jid = $iq->bind->jid->value) {
+								$self->{jid} = AnyEvent::StreamXML::XMPP::JID->new($jid);
 								(shift @next)->();
 							} else {
 								$self->disconnect("Can't find jid in response");
@@ -181,7 +176,8 @@ return;
 		};
 		$self->{stanza_handlers}{proceed} = sub {
 			my $s = shift;
-			if ($s->getAttribute('xmlns') eq ns('tls')) {
+			warn "handle proceed";
+			if ($s->attr('xmlns') eq ns('tls')) {
 				if($self->{want_ssl_proceed}) {
 					$self->{h}->starttls('connect');
 					$self->{ssl} = 1;
@@ -204,8 +200,8 @@ return;
 				'-from'         => $self->{jid},
 				'-to'           => $self->{jid}->domain,
 			}
-		}, doc => 1 )->documentElement->toString;
-		$s =~ s{/>$}{>};
+		});
+		$s =~ s{/>$}{>}s;
 		$self->send($s);
 	}
 

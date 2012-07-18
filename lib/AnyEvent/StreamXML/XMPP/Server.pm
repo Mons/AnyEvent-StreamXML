@@ -365,7 +365,7 @@ sub initial_stream {
 				elsif (exists $self->{gen_res}) {
 					$res = $self->{gen_res}->( $self->{login} );
 				} else {
-					$b->error('not-allowed');
+					$b->reply_error('not-allowed');
 					return;
 				}
 				

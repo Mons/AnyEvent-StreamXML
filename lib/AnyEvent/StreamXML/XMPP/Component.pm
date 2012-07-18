@@ -5,7 +5,7 @@ use mro 'c3';
 use common::sense;
 use Scalar::Util 'weaken';
 use uni::perl ':dumper';
-use XML::Hash::LX;
+#use XML::Fast;
 use Carp;
 use Digest::SHA1 'sha1_hex';
 use POSIX 'strftime';
@@ -49,14 +49,16 @@ sub init {
 	$self->{disco}{ features }{ disco_info }++;
 	
 	weaken($self);
+	$self->{stanza_handlers}{handshake} = sub {
+		$self or return;
+		$self->{h}->timeout(undef);
+		$self->{handshaked} = 1;
+		$self->event(handshaked => ());
+	};
+=for rem
 	$self->{stanza_handlers}{'stream:error'} = sub {
 		$self or return;
 		warn "Stream Error @_";
-	};
-	$self->{stanza_handlers}{handshake} = sub {
-		$self or return;
-		$self->{handshaked} = 1;
-		$self->event(handshaked => ());
 	};
 	$self->{stanza_handlers}{presence} = sub {
 		$self or return;
@@ -101,11 +103,11 @@ sub init {
 					$self->event( $event => $s, $query );
 				} else {
 					warn "iq query.$ns (event $event) not handled";
-					$s->error('not-acceptable', { iq => { from => $self->{jid} } });
+					$s->reply_error('not-acceptable', { iq => { from => $self->{jid} } });
 				}
 			} else {
 				warn "iq without query";
-				$s->error('not-acceptable', { iq => { from => $self->{jid} } });
+				$s->reply_error('not-acceptable', { iq => { from => $self->{jid} } });
 			}
 			#};warn if $@;
 		}
@@ -121,20 +123,19 @@ sub init {
 		$self->disconnect();
 		$self->_reconnect_after;
 	};
+=cut
 	#warn dumper $self->{handlers};
 
 	$self->on(
 		stream_ready => sub {
 			my ($c,$stream) = @_;
-			#warn "stream ready, start handshake @_";
-			# TODO: domain detection
-			$self->{stream} = $stream;
-			$self->{id} = $stream->getAttribute('id');
-			if (( !$self->{jid} or $self->{jid} !~ /\./) and $stream->getAttribute('from') ) {
-				$self->{jid} = jid($stream->getAttribute('from'));
+			$self->{id} = $stream->attr('id');
+			if (( !$self->{jid} or $self->{jid} !~ /\./) and $stream->from ) {
+				$self->{jid} = $stream->from;
 			}
 			($self->{xmppserver}{domain}) = $self->{jid} =~ /^[^.]+\.(.+)$/;
 			warn "Started on domain $self->{xmppserver}{domain}";
+			$self->{h}->timeout($self->{timeout});
 			$c->send({
 				handshake => {
 					-from => $self->{jid},
@@ -146,15 +147,13 @@ sub init {
 			my ($c,$iq) = @_;
 			$iq->reply({
 				iq => {
-					query => [
-						{ -xmlns => ns('disco_info') },
-						{ identity => +{
-							map { ("-$_" => $self->{disco}{identity}{$_}) } keys %{ $self->{disco}{identity} }
-						} },
-						( map { +{
-							feature => { -var => ns( $_ ) }
-						} } keys %{ $self->{disco}{features} } ),
-					]
+					query => {
+						-xmlns => ns('disco_info'),
+						identity => +{ map { ("-$_" => $self->{disco}{identity}{$_}) } keys %{ $self->{disco}{identity} } },
+						feature => [
+							map { +{ -var => ns($_) } } keys %{ $self->{disco}{features} }
+						]
+					}
 				}
 			});
 			if (! $iq->from->user) {
@@ -168,11 +167,9 @@ sub init {
 						if (my $iq = shift) {
 							#warn "response: $iq";
 							$self->cleanup(sub{ delete $self->{xmppserver} });
-							my ($query) = $iq->getElementsByTagName('query');
-							my (@features) = $query->getElementsByTagName('feature');
 							my $features = $self->{xmppserver}{features} ||= {};
-							for ($query->getElementsByTagName('feature')) {
-								$features->{ rns( $_->getAttribute('var') ) }++;
+							for ($iq->query->feature->attr('var')) {
+								$features->{ $_ }++;
 							}
 							#warn dumper [ $self->{xmppserver} ];
 							if ( exists $self->{xmppserver}{features}{ping} and $self->{use_ping} ) {
@@ -213,13 +210,15 @@ sub init {
 		},
 		register => sub {
 			my ($c,$iq) = @_;
-			my $type = $iq->type;
-			if ($type eq 'set') {
-				if (my $rem = $iq->getElementsByTagName('remove')) {
-					$type = "remove";
-				}
+			my $type = $iq->attr('type');
+			if ($type eq 'set' and $iq->query->remove) {
+				$type = "remove";
 			}
-			$c->event("register_$type",$iq);
+			if ($c->handles("register_$type")) {
+				$c->event("register_$type",$iq);
+			} else {
+				warn "register_$type not handled.";
+			}
 		},
 	);
 }

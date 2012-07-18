@@ -4,8 +4,12 @@ use parent 'AnyEvent::StreamXML';
 use mro 'c3';
 use common::sense;
 use uni::perl ':dumper';
-use XML::Hash::LX 0.06001;
+#use XML::Hash::LX 0.06001;
+use XML::Fast;
 use Carp;
+use Scalar::Util 'weaken';
+
+use 5.010;
 
 use Try::Tiny;
 use Time::HiRes 'time';
@@ -22,7 +26,63 @@ sub init {
 	$self->{jid} or croak "Need 'jid'";
 	$self->{jid} = AnyEvent::StreamXML::XMPP::JID->new($self->{jid}) unless ref $self->{jid};
 	$self->{stream_ns} = ns('component_accept') unless defined $self->{stream_ns};
+	$self->{handlers}{StreamEnd} ||= sub {
+		$self or return;
+		warn "Received graceful disconnect (</stream>). Send response and reconnect...";
+		#$self->send_end;
+		$self->disconnect();
+		$self->_reconnect_after;
+	};
 	$self->next::method();
+	weaken($self);
+	$self->{stanza_handlers}{'stream:error'} = sub {
+		$self or return;
+		my $s = shift;
+		warn "Stream Error $s";
+		my $cond = $s->child(0)->name;
+		my $text = $cond . ( $s->text ? ': '.$s->text->value : '' );
+		given($cond) {
+			when ([qw(
+				bad-format
+				bad-namespace-prefix
+				conflict
+				connection-timeout
+				improper-addressing
+				internal-server-error
+				invalid-from
+				invalid-id
+				invalid-namespace
+				invalid-xml
+				policy-violation
+				remote-connection-failed
+				resource-constraint
+				restricted-xml
+				system-shutdown
+				unsupported-stanza-type
+				xml-not-well-formed
+			)]) {
+				$self->reconnect($text);
+			}
+			when ([qw(
+				host-gone
+				host-unknown
+				not-authorized
+				unsupported-encoding
+				unsupported-version
+			)]) { $self->disconnect($text); };
+			#when([qw(
+			#	see-other-host
+			#)]) {
+			#	$self->disconnect($text);
+				# TODO: follow
+				#$self->connect;
+			#};
+			default {
+				$self->disconnect($text);
+			}
+		}
+		$self->disconnect(eval{ $s->child(0)->name } // "$s");
+	};
 	$self->{stanza_handlers}{presence} = sub {
 		$self or return;
 		my $s = AnyEvent::StreamXML::XMPP::Presence->new($_[0],$self);
@@ -40,17 +100,18 @@ sub init {
 		my $node = shift;
 		my $s = AnyEvent::StreamXML::XMPP::Iq->new($node, $self);
 		$self->{debug_recv_stanza} and $self->{debug_recv_stanza}($s);
-		my $type = $s->getAttribute('type');
+		my $type = $s->type;
 		if ($type eq 'result' or $type eq 'error') {
 			$s->noreply();
 			# lookup by id
-			my $id = $s->getAttribute('id');
+			my $id = $s->id;
+			$self->{h}->timeout(undef);
 			if ($id and exists $self->{req}{$id}) {
 				my $cb = delete $self->{req}{$id};
 				if ($type eq 'error') {
 					my ($err,$etext);
-					if (($err) = $s->getElementsByTagName('error') and do{ ($err) = grep { $_->isa('XML::LibXML::Element') } $err->childNodes; $err } ) {
-						$etext = $err->nodeName;
+					if ($err = $s->error->child(0) ) {
+						$etext = $err->name;
 					} else {
 						$etext = "Stanza type error";
 					}
@@ -59,15 +120,15 @@ sub init {
 					$cb->( $s );
 				}
 			} else {
-				warn "No callback for id $id: $s ";
+				#warn "No callback for id $id: $s ";
 			}
 		}
 		else {
 			#warn "iq type $type";
 			# request to us
-			my ($query) = $s->getElementsByTagName('query');
+			my $query = $s->query;
 			#eval {
-			if( my $ns = $query && $query->getAttribute('xmlns') ) {
+			if( my $ns = $query->attr('xmlns') ) {
 			#warn "iq query ($query) $ns -> ".rns($ns);
 				my $event = rns($ns);
 				if ( $self->handles( $event ) ) {
@@ -81,21 +142,15 @@ sub init {
 								name => 'AnyEvent::StreamXML',
 								version => $AnyEvent::StreamXML::VERSION,
 							},
-						}})
+						}});
 					} else {
 						warn "iq query.$ns (event $event) not handled";
-						$s->error('not-acceptable', { iq => { -from => $self->{jid} } });
+						$s->reply_error('not-acceptable', { iq => { -from => $self->{jid} } });
 					}
 				}
 			} else {
-				my $tag;
-				for my $child ($s->childNodes) {
-					next if ($child->isa('XML::LibXML::Text'));
-					$tag = $child;
-					last;
-				}
-				if( $tag ) {
-					my $nn = $tag->nodeName;
+				if( my $tag = $s->child(0) ) {
+					my $nn = $tag->name;
 					if ($nn eq 'ping') {
 						if ( $self->handles( $nn ) ) {
 							return $self->event( $nn => $s );
@@ -121,16 +176,17 @@ sub init {
 							return;
 						}
 					}
-					my $ns = $tag->getAttribute('xmlns');
-					my $event = $ns ne $s->getAttribute('xmlns') ? rns($ns) : $tag->nodeName;
+					my $ns = $tag->attr('xmlns');
+					my $event = $ns ne $s->attr('xmlns') ? rns($ns) : $tag->name;
 					#warn "iq without query but with $tag / ".$tag->nodeName.'/xmlns='.$ns."; emitting event $event";
 					if ($self->handles( $event )) {
 						$self->event( $event => $s );
 						return;
+					} else {
+						warn "Not handled $event";
 					}
 				}
-				warn "iq without query";
-				$s->error('not-acceptable', { iq => { -from => $self->{jid} } });
+				$s->reply_error('not-acceptable', { iq => { -from => $self->{jid} } });
 			}
 			#};warn if $@;
 		}
@@ -144,7 +200,7 @@ sub nextid {
 
 sub send_start {
 	my $self = shift;
-	my $s = hash2xml( {
+	my $s = hash2xml({
 		'stream:stream' => {
 			'-version'      => "1.0",
 			'-xml:lang'     => "en",
@@ -153,7 +209,7 @@ sub send_start {
 			'-xmlns:stream' => ns('etherx_streams'),
 			'-to'           => $self->{jid},
 		}
-	}, doc => 1 )->documentElement->toString;
+	});
 	$s =~ s{/>$}{>};
 	$self->send($s);
 }
@@ -173,30 +229,31 @@ sub send_end {
 
 sub request {
 	my $self = shift;
-	my $cb = pop;
+	my $cb;$cb = pop if ref $_[-1] eq 'CODE';
 	my $s = $self->_compose(@_);
-	$s = $self->{lxml}->parse_string( $s )->documentElement unless ref $s;
 	#return $cb->(undef, "No 'to' attribute'") unless $s->getAttribute('to');
-	warn "composed: ".dumper $s;
-	my $id = $s->getAttribute('id');
+	#warn "composed: ".dumper $s;
+	my $id = $s->attr('id');
 	unless ($id) {
 		$id = $self->nextid;
-		$s->setAttribute('id',$id);
+		$s->attr('id',$id);
 	}
-	my $t;
-	exists $self->{req}{$id} and warn "duplicate id $id for @{[ ( caller )[1,2] ]}\n";
-	$self->{req}{$id} = sub {
-		undef $t;
-		$cb->( @_ );
-	};
-	
-	$s->setAttribute( type => 'get' ) unless $s->getAttribute('type');
-	$s->setAttribute( from => $self->{jid} ) unless $s->getAttribute('from');
-	
-	my $t; $t = AE::timer 30,0,sub {
-		my $rq = delete $self->{req}{$id};
-		$rq->( undef, "Response timeout" );
-	};
+	$s->attr( type => 'get' ) unless $s->attr('type');
+	$s->attr( from => $self->{jid} ) unless $s->attr('from');
+	if ($cb) {
+		my $t;
+		exists $self->{req}{$id} and warn "duplicate id $id for @{[ ( caller )[1,2] ]}\n";
+		$self->{req}{$id} = sub {
+			undef $t;
+			$cb->( @_ );
+		};
+		
+		my $t; $t = AE::timer 30,0,sub {
+			my $rq = delete $self->{req}{$id};
+			$rq->( undef, "Response timeout" );
+		};
+	}
+	$self->{h}->timeout($self->{timeout}) if $cb;
 	$self->send( $s->toString() );
 	return $id;
 }
@@ -209,24 +266,17 @@ sub reply {
 	}
 	my $r = $_[0]{iq};
 	my $s = $self->_compose(@_);
-	warn "reply: $s";
-	$r->{-type} ||= 'result';
-	$r->{-from} = $self->{jid};
-	$r->{-to} = $iq->getAttribute('from') if $iq->getAttribute('from');
-	my $s = $self->_compose(@_);
-	warn "reply: $s";
-	$s = $self->{lxml}->parse_string( $s )->documentElement unless ref $s;
 	ref $s or die "Can't sent $_[0] as a reply to $iq at @{[ (caller)[1,2] ]}\n";
-	$s->setAttribute( type => 'result' ) unless $s->getAttribute('type');
-	$s->setAttribute( from => $self->{jid} );
-	$s->setAttribute( to => $iq->getAttribute('from') ) if $iq->getAttribute('from');
-	$s->setAttribute( id => $iq->getAttribute('id') );
+	$s->attr('type', 'result') unless $s->attr('type');
+	$s->attr('from', $iq->attr('to') // $self->{jid}) unless length $s->attr('from');
+	$s->attr('to', $iq->attr('from')) if $iq->attr('from');
+	$s->attr('id', $iq->id);
+	#warn "reply: $s";
 	#warn "Composed reply: ".$s;
-	my $rq = ($s->getElementsByTagName('query'))[0];
-	if ($rq and !$rq->getAttribute('xmlns')) {
-		my $q = ($iq->getElementsByTagName('query'))[0];
-		if ($q) {
-			$rq->setAttribute('xmlns', $q->getAttribute('xmlns'));
+	my $rq = $s->child(0);
+	if ($rq and !$rq->attr('xmlns') and $rq->name ne 'error') {
+		if (my $ns = $iq->child(0)->attr('xmlns')) {
+			$rq->attr('xmlns', $ns);
 		} else {
 			warn "iq.query doesn't have xmlns and have no iq.query in request";
 		}
@@ -264,27 +314,36 @@ our %ERR = (
 exists $ERR{'internal-server-error'} or die "Need 'internal-server-error'";
 
 sub error {
-	my $self = shift;
-	my $iq = shift;
+	my $self  = shift;
+	my $iq    = shift;
 	my $error = shift;
-	exists $ERR{$error} or return warn("Unknown error: $error"),$iq->error('internal-server-error');
+	my $errtext;
+	if (ref $error) {
+		($error,$errtext) = @$error;
+	}
+	exists $ERR{$error} or return warn("Unknown error: $error"),$iq->reply_error('internal-server-error');
 	if (!@_) {
 		@_ = ({ iq => {} });
 	}
 	my $s = $self->_compose(@_);
 	ref $s or die "Can't sent $_[0] as a reply to $iq at @{[ (caller)[1,2] ]}\n";
-	$s->setAttribute( type => 'error' ) unless $s->getAttribute('type');
-	$s->setAttribute( from => $self->{jid} );
-	$s->setAttribute( to => $iq->getAttribute('from') ) if $iq->getAttribute('from');
-	$s->setAttribute( id => $iq->getAttribute('id') );
-	
-	my $e = XML::LibXML::Element->new('error');
-	$e->setAttribute( type => $ERR{$error}[ 0 ] );
-	$e->setAttribute( code => $ERR{$error}[ 1 ] );
-		my $n = XML::LibXML::Element->new($error);
-		$n->setAttribute(xmlns => ns( 'stanzas' ));
-		$e->appendChild($n);
-	$s->appendChild($e);
+	$s->attr('type', 'error') unless $s->attr('type');
+	$s->attr('from', $self->{jid});
+	$s->attr('to', $iq->attr('from')) if $iq->attr('from');
+	$s->attr('id', $iq->id);
+	$s->child({
+		error => {
+			-type  => $ERR{$error}[ 0 ],
+			-code  => $ERR{$error}[ 1 ],
+			$error => { -xmlns => ns('stanzas') },
+			$errtext ? (
+				text => {
+					-xmlns => 'urn:ietf:params:xml:ns:xmpp-stanzas',
+					'#text' => $errtext,
+				},
+			) : (),
+		}
+	});
 	try {
 		$iq->replied(1);
 	} catch {};
@@ -300,12 +359,12 @@ sub message {
 		}
 	}
 	my $s = $self->_compose(@_);
-	my $id = $s->getAttribute('id');
-	#unless ($id) {
-	#	$id = $self->nextid;
-	#	$s->setAttribute('id',$id);
-	#}
-	$s->setAttribute( from => $self->{jid} ) unless $s->getAttribute('from');
+	my $id = $s->id;
+	unless ($id) {
+		$id = $self->nextid;
+		$s->id($id);
+	}
+	$s->attr( from => $self->{jid} ) unless $s->attr('from');
 	$self->send( $s->toString() );
 	
 }
@@ -313,6 +372,7 @@ sub message {
 sub presence {
 	my $self = shift;
 	my $type = shift;
+	my $data = ref $_[-1] eq 'HASH' ? pop : {};
 	my ($from,$to) = ($self->{jid});
 	if (@_ == 1) {
 		$to = shift
@@ -321,13 +381,8 @@ sub presence {
 		($from,$to) = @_;
 	}
 	else {
-		warn "Wrong arguments to .presence(type, from, [to]): [$type @_]\n";
+		warn "Wrong arguments to .presence(type, from, [to], [{data}]): ".dumper([$type,@_])." at @{[ (caller)[1,2] ]}\n";
 		return;
-	}
-	if (ref $_[0] eq 'HASH') {
-		unless ( exists $_[0]{message} ) {
-			$_[0] = { message => $_[0] };
-		}
 	}
 	my $s = $self->_compose({
 		presence => {
@@ -335,6 +390,7 @@ sub presence {
 			-from => $from,
 			-to => $to,
 			-id => $self->nextid,
+			%$data,
 		}
 	});
 	$self->send( $s->toString() );

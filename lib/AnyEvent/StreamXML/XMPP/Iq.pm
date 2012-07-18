@@ -2,43 +2,34 @@ package AnyEvent::StreamXML::XMPP::Iq;
 
 use parent 'AnyEvent::StreamXML::XMPP::Stanza';
 
-sub replied { delete shift->[1];return }
+sub replied { delete shift->[2];return }
 *noreply = \&replied;
 
-sub type { $_[0][2]{type} ||= $_[0][0]->getAttribute('type'); }
 sub subtype {
-	$_[0][2]{subtype} ||= do {eval{
-		my @ch = $_[0][0]->childNodes;
-		my $fc;
-		for (@ch) {
-			next if $_->isa('XML::LibXML::Text');
-			$fc = $_;
-		}
-		$fc->getAttribute('xmlns');
-	}};
+	return $_[0]->child(0)->attr('xmlns');
 }
-sub query { $_[0][2]{query} ||= ( $_[0][0]->getElementsByTagName('query') )[0]; }
+#sub query { $_[0]->query }
 
 sub reply {
 	my $self = shift;
-	$self->[1] or return warn "No connection for reply()";
-	$self->[1]->reply( $self, @_ );
-	delete $self->[1];
+	$self->[2] or return warn "No connection for reply()";
+	$self->[2]->reply( $self, @_ );
+	delete $self->[2];
 }
 
-sub error {
+sub reply_error {
 	my $self = shift;
-	$self->[1] or return warn "No connection for error()";
-	$self->[1]->error( $self, @_ );
-	delete $self->[1];
+	$self->[2] or return warn "No connection for error()";
+	$self->[2]->error( $self, @_ );
+	delete $self->[2];
 }
 
 sub DESTROY {
 	my $self = shift;
 	local $@;
 	local $SIG{__DIE__} = sub { warn "Exception during StreamXML.XMPP.Iq.DESTROY: @_"; };
-	$self->[1] or return @$self = ();
-	$self->error('not-acceptable');
+	$self->[2] or return @$self = ();
+	$self->reply_error('not-acceptable');
 	return @$self = ();
 }
 
